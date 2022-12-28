@@ -133,6 +133,13 @@ impl<B, C: Channel, T: Target> Transfer<B, C, T> {
         }
     }
 
+    /// Returns whether the half-transfer completion event was triggered.
+    pub fn is_half_complete(&self) -> bool {
+        crate::unwrap!(self.inner.as_ref())
+            .channel
+            .is_event_triggered(Event::HalfTransfer)
+    }
+
     /// Is this transfer complete?
     pub fn is_complete(&self) -> bool {
         let inner = crate::unwrap!(self.inner.as_ref());
