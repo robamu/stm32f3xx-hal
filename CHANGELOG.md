@@ -14,8 +14,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
-No changes.
-
 ### Changed
 
 - serial: The DMA functions `write_all` and `read_exact` now returns
@@ -57,6 +55,10 @@ No changes.
   `transfer_len`  which returns the configured transfer length. Also added additional
   stop method `stop_and_return_received_bytes` which returns the bytes received so
   far in the transfer.
+- dma: Added `is_half_complete` and `is_event_triggered` methods
+  for `Transfer`
+- dma: Added `get_remaining_transfer_len` for the `Channel` trait
+  to read the NDTR register.
 
 ## [v0.9.1] - 2022-09-07
 
