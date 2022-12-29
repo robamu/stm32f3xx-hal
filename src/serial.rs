@@ -95,7 +95,7 @@ pub enum RxEvent {
     ///
     /// This event is set by hardware when the data currently being received in the shift register
     /// is ready to be transferred into the RDR register while
-    /// [`Event::ReceiveDataRegisterNotEmpty`] is set.
+    /// [`RxEvent::ReceiveDataRegisterNotEmpty`] is set.
     ///
     /// See [`Error::Overrun`] for a more detailed description.
     #[doc(alias = "ORE")]
@@ -313,7 +313,7 @@ pub fn configure_rx_interrupt(
     };
 }
 
-/// Check whether a transmitter interrupt was enabled.
+/// Check whether a transmitter interrupt is enabled.
 #[inline]
 pub fn is_tx_interrupt_configured(usart: &impl Instance, event: TxEvent) -> bool {
     match event {
@@ -348,6 +348,100 @@ pub fn is_interrupt_configured(usart: &impl Instance, event: Event) -> bool {
         Event::Rx(rx_event) => is_rx_interrupt_configured(usart, rx_event),
         Event::Tx(tx_event) => is_tx_interrupt_configured(usart, tx_event),
     }
+}
+
+/// Enable or disable interrupt for the specified [`TxEvent`]s.
+///
+/// Like [`Serial::configure_interrupt`], but instead using an enumset. The corresponding
+/// interrupt for every [`TxEvent`] in the set will be enabled, every other interrupt will be
+/// **disabled**.
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+pub fn configure_tx_interrupts(usart: &mut impl Instance, events: EnumSet<TxEvent>) {
+    for event in events.complement().iter() {
+        configure_tx_interrupt(usart, event, false);
+    }
+    for event in events.iter() {
+        configure_tx_interrupt(usart, event, true);
+    }
+}
+
+/// Enable or disable interrupt for the specified [`RxEvent`]s.
+///
+/// Like [`Serial::configure_interrupt`], but instead using an enumset. The corresponding
+/// interrupt for every [`RxEvent`] in the set will be enabled, every other interrupt will be
+/// **disabled**.
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+pub fn configure_rx_interrupts(usart: &mut impl Instance, events: EnumSet<RxEvent>) {
+    for event in events.complement().iter() {
+        configure_rx_interrupt(usart, event, false);
+    }
+    for event in events.iter() {
+        configure_rx_interrupt(usart, event, true);
+    }
+}
+
+/// Check which interrupts are enabled for all [`TxEvent`]s
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+#[inline]
+pub fn configured_tx_interrupts(usart: &impl Instance) -> EnumSet<TxEvent> {
+    let mut tx_events = EnumSet::new();
+
+    for event in EnumSet::<TxEvent>::all().iter() {
+        if is_tx_interrupt_configured(usart, event) {
+            tx_events |= event;
+        }
+    }
+
+    tx_events
+}
+
+/// Check which interrupts are enabled for all [`RxEvent`]s
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+#[inline]
+pub fn configured_rx_interrupts(usart: &impl Instance) -> EnumSet<RxEvent> {
+    let mut rx_events = EnumSet::new();
+
+    for event in EnumSet::<RxEvent>::all().iter() {
+        if is_rx_interrupt_configured(usart, event) {
+            rx_events |= event;
+        }
+    }
+
+    rx_events
+}
+
+/// Get an [`EnumSet`] of all fired [`RxEvent`]s
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+pub fn triggered_rx_events(usart: &impl Instance) -> EnumSet<RxEvent> {
+    let mut rx_events = EnumSet::new();
+
+    for event in EnumSet::<RxEvent>::all().iter() {
+        if is_rx_event_triggered(usart, event) {
+            rx_events |= event;
+        }
+    }
+
+    rx_events
+}
+
+/// Get an [`EnumSet`] of all fired [`TxEvent`]s
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+pub fn triggered_tx_events(usart: &impl Instance) -> EnumSet<TxEvent> {
+    let mut tx_events = EnumSet::new();
+
+    for event in EnumSet::<TxEvent>::all().iter() {
+        if is_tx_event_triggered(usart, event) {
+            tx_events |= event;
+        }
+    }
+
+    tx_events
 }
 
 /// Serial error
@@ -610,18 +704,25 @@ mod split {
         /// Check if an interrupt event happend.
         #[inline]
         pub fn is_event_triggered(&self, event: TxEvent) -> bool {
-            // Safety: We are only reading the ISR register here, which
-            // should not affect the RX half, and the API only exposes information
-            // about the TX part.
+            // Safety: Only reads TX specific events, should not be influenced
+            // by RX half
             is_tx_event_triggered(unsafe { self.usart() }, event)
         }
 
-        /// Enables or disables an interrupt for a given [`Event`].
+        /// Enables or disables an interrupt for a given [`TxEvent`].
         #[inline]
         pub fn configure_interrupt(&mut self, event: TxEvent, enable: impl Into<crate::Toggle>) {
             // Safety: Only configures TX specific interrupts, which should not interfere
             // with the RX half
             configure_tx_interrupt(unsafe { self.usart_mut() }, event, enable)
+        }
+
+        /// Checks whether a transmitter interrupt is enabled.
+        #[inline]
+        pub fn is_interrupt_configured(&self, event: TxEvent) -> bool {
+            // Safety: Only reads TX specific interrupts, should not be influenced
+            // by RX half
+            is_tx_interrupt_configured(unsafe { self.usart() }, event)
         }
 
         /// Clears the given interrupt.
@@ -630,6 +731,23 @@ mod split {
             // Safety: Only clears TX specific interrupts, which should not interfere
             // with the RX half
             clear_tx_event(unsafe { self.usart_mut() }, event)
+        }
+
+        /// Check which interrupts are enabled for all [`TxEvent`]s
+        #[cfg(feature = "enumset")]
+        #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+        #[inline]
+        pub fn configured_interrupts(&self) -> EnumSet<TxEvent> {
+            // Safety: Only reads TX specific interrupts, should not be influenced
+            // by RX half
+            configured_tx_interrupts(unsafe { self.usart() })
+        }
+
+        /// Get a tuple of [`EnumSet`]s of all fired interrupt events.
+        #[cfg(feature = "enumset")]
+        #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+        pub fn triggered_events(&self) -> EnumSet<TxEvent> {
+            triggered_tx_events(unsafe { self.usart() })
         }
     }
 
@@ -687,10 +805,50 @@ mod split {
         /// Check if an interrupt event happend.
         #[inline]
         pub fn is_event_triggered(&self, event: RxEvent) -> bool {
-            // Safety: We are only reading the ISR register here, which
-            // should not affect the TX half, and the API only exposes information
-            // about the RX part.
+            // Safety: Only reads RX specific events, should not be influenced
+            // by TX half
             is_rx_event_triggered(unsafe { self.usart() }, event)
+        }
+
+        /// Enables or disables an interrupt for a given [`RxEvent`].
+        #[inline]
+        pub fn configure_interrupt(&mut self, event: RxEvent, enable: impl Into<crate::Toggle>) {
+            // Safety: Only configures RX specific interrupts, which should not interfere
+            // with the TX half
+            configure_rx_interrupt(unsafe { self.usart_mut() }, event, enable)
+        }
+
+        /// Checks whether a transmitter interrupt is enabled.
+        #[inline]
+        pub fn is_interrupt_configured(&self, event: RxEvent) -> bool {
+            // Safety: Only reads RX specific interrupts, should not be influenced
+            // by TX half
+            is_rx_interrupt_configured(unsafe { self.usart() }, event)
+        }
+
+        /// Clears the given interrupt.
+        #[inline]
+        pub fn clear_event(&mut self, event: RxEvent) {
+            // Safety: Only clears RX specific interrupts, which should not interfere
+            // with the TX half
+            clear_rx_event(unsafe { self.usart_mut() }, event)
+        }
+
+        /// Check which interrupts are enabled for all [`RxEvent`]s
+        #[cfg(feature = "enumset")]
+        #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+        #[inline]
+        pub fn configured_interrupts(&self) -> EnumSet<RxEvent> {
+            // Safety: Only reads RX specific interrupts, should not be influenced
+            // by TX half
+            configured_rx_interrupts(unsafe { self.usart() })
+        }
+
+        /// Get a tuple of [`EnumSet`]s of all fired interrupt events.
+        #[cfg(feature = "enumset")]
+        #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+        pub fn triggered_events(&self) -> EnumSet<RxEvent> {
+            triggered_rx_events(unsafe { self.usart() })
         }
     }
 }
@@ -902,12 +1060,7 @@ where
     #[cfg(feature = "enumset")]
     #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
     pub fn configure_tx_interrupts(&mut self, events: EnumSet<TxEvent>) {
-        for event in events.complement().iter() {
-            self.configure_tx_interrupt(event, false);
-        }
-        for event in events.iter() {
-            self.configure_tx_interrupt(event, true);
-        }
+        configure_tx_interrupts(&mut self.usart, events)
     }
 
     /// Enable or disable interrupt for the specified [`RxEvent`]s.
@@ -918,12 +1071,7 @@ where
     #[cfg(feature = "enumset")]
     #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
     pub fn configure_rx_interrupts(&mut self, events: EnumSet<RxEvent>) {
-        for event in events.complement().iter() {
-            self.configure_rx_interrupt(event, false);
-        }
-        for event in events.iter() {
-            self.configure_rx_interrupt(event, true);
-        }
+        configure_rx_interrupts(&mut self.usart, events)
     }
 
     /// Check whether a transmitter interrupt was enabled.
@@ -959,16 +1107,8 @@ where
     #[cfg(feature = "enumset")]
     #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
     #[inline]
-    pub fn configured_tx_interrupts(&mut self) -> EnumSet<TxEvent> {
-        let mut tx_events = EnumSet::new();
-
-        for event in EnumSet::<TxEvent>::all().iter() {
-            if self.is_tx_interrupt_configured(event) {
-                tx_events |= event;
-            }
-        }
-
-        tx_events
+    pub fn configured_tx_interrupts(&self) -> EnumSet<TxEvent> {
+        configured_tx_interrupts(&self.usart)
     }
 
     /// Check which interrupts are enabled for all [`RxEvent`]s
@@ -976,15 +1116,7 @@ where
     #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
     #[inline]
     pub fn configured_rx_interrupts(&mut self) -> EnumSet<RxEvent> {
-        let mut rx_events = EnumSet::new();
-
-        for event in EnumSet::<RxEvent>::all().iter() {
-            if self.is_rx_interrupt_configured(event) {
-                rx_events |= event;
-            }
-        }
-
-        rx_events
+        configured_rx_interrupts(&self.usart)
     }
 
     /// Check if an interrupt event happend.
@@ -1030,30 +1162,14 @@ where
     #[cfg(feature = "enumset")]
     #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
     pub fn triggered_rx_events(&self) -> EnumSet<RxEvent> {
-        let mut rx_events = EnumSet::new();
-
-        for event in EnumSet::<RxEvent>::all().iter() {
-            if self.is_rx_event_triggered(event) {
-                rx_events |= event;
-            }
-        }
-
-        rx_events
+        triggered_rx_events(&self.usart)
     }
 
     /// Get an [`EnumSet`] of all fired [`TxEvent`]s
     #[cfg(feature = "enumset")]
     #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
     pub fn triggered_tx_events(&self) -> EnumSet<TxEvent> {
-        let mut tx_events = EnumSet::new();
-
-        for event in EnumSet::<TxEvent>::all().iter() {
-            if self.is_tx_event_triggered(event) {
-                tx_events |= event;
-            }
-        }
-
-        tx_events
+        triggered_tx_events(&self.usart)
     }
 
     /// Clear an event.
@@ -1085,8 +1201,8 @@ where
     /// Enable or disable overrun detection
     ///
     /// When overrun detection is disabled and new data is received while the
-    /// [`Event::ReceiveDataRegisterNotEmpty`] flag is still set,
-    /// the [`Event::OverrunError`] flag is not set and the new received data overwrites the
+    /// [`RxEvent::ReceiveDataRegisterNotEmpty`] flag is still set,
+    /// the [`RxEvent::OverrunError`] flag is not set and the new received data overwrites the
     /// previous content of the RDR register.
     #[doc(alias = "OVRDIS")]
     #[inline]
@@ -1100,8 +1216,8 @@ where
     /// Configuring the UART to match each received character,
     /// with the configured one.
     ///
-    /// If the character is matched [`Event::CharacterMatch`] is generated,
-    /// which can fire an interrupt, if enabled via [`Serial::configure_interrupt()`]
+    /// If the character is matched [`RxEvent::CharacterMatch`] is generated,
+    /// which can fire an interrupt, if enabled via [`Serial::configure_interrupt`]
     #[inline(always)]
     pub fn set_match_character(&mut self, char: u8) {
         // Note: This bit field can only be written when reception is disabled (RE = 0) or the
@@ -1125,7 +1241,7 @@ where
 {
     /// Set the receiver timeout value.
     ///
-    /// The RTOF flag ([`Event::ReceiverTimeout`]) is set if, after the last received character,
+    /// The RTOF flag ([`RxEvent::ReceiverTimeout`]) is set if, after the last received character,
     /// no new start bit is detected for more than the receiver timeout value, where the value
     /// is being a counter, which is decreased by the configured baud rate.
     ///

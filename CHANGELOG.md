@@ -50,7 +50,9 @@ No changes.
     - `clear_event`, `clear_tx_event` and `clear_rx_event`
     - `configure_interrupt`, `configure_tx_nterrupt` and `configure_rx_interrupt`
     - `is_interrupt_configured`, `is_tx_interrupt_configured`, `is_rx_interrupt_configured`
-- serial:  Add two helper methods on `Tx`: `configure_interrupt` and `clear_event`
+- serial:  Add complete helper method set for both `Tx` and `Rx`:
+   - `is_event_triggered`, `clear_event`, `triggered_events` (enumset)
+   - `configure_interrupt`, `is_interrupt_configured`, `configured_interrupts` (enumset)
 - serial:  Add two helper methods on `SerialDmaRx`: `is_dma_event_triggered` and `received_bytes`.
   `received_bytes` returns the bytes received during a DMA transfer so far.
 
