@@ -165,12 +165,6 @@ impl<B, C: Channel, T: Target> Transfer<B, C, T> {
         self.stop()
     }
 
-    pub(crate) fn get_remaining_transfer_len(&self) -> u16 {
-        crate::unwrap!(self.inner.as_ref())
-            .channel
-            .get_remaining_transfer_len()
-    }
-
     pub(crate) fn target(&self) -> &T {
         &crate::unwrap!(self.inner.as_ref()).target
     }
@@ -367,7 +361,7 @@ pub trait Channel: private::Channel {
     /// Get the content of the number of data (NDTR) register
     ///
     /// If the DMA has not been enabled yet, this will be the value which
-    /// was set with [`set_transfer_length`]. If the DMA is active, the value
+    /// was set with [`Self::set_transfer_length`]. If the DMA is active, the value
     /// indicates the number of remaining bytes to be transmitted. This value
     /// is decremented by the hardware after each DMA transfer.
     #[inline]
