@@ -133,10 +133,21 @@ impl<B, C: Channel, T: Target> Transfer<B, C, T> {
         }
     }
 
+    /// Check whether a DMA interrupt event triggered.
+    pub fn is_event_triggered(&self, event: Event) -> bool {
+        crate::unwrap!(self.inner.as_ref())
+            .channel
+            .is_event_triggered(event)
+    }
+
+    /// Returns whether the half-transfer completion event was triggered.
+    pub fn is_half_complete(&self) -> bool {
+        self.is_event_triggered(Event::HalfTransfer)
+    }
+
     /// Is this transfer complete?
     pub fn is_complete(&self) -> bool {
-        let inner = crate::unwrap!(self.inner.as_ref());
-        inner.channel.is_event_triggered(Event::TransferComplete)
+        self.is_event_triggered(Event::TransferComplete)
     }
 
     /// Stop this transfer and return ownership over its parts
@@ -152,6 +163,16 @@ impl<B, C: Channel, T: Target> Transfer<B, C, T> {
         while !self.is_complete() {}
 
         self.stop()
+    }
+
+    pub(crate) fn get_remaining_transfer_len(&self) -> u16 {
+        crate::unwrap!(self.inner.as_ref())
+            .channel
+            .get_remaining_transfer_len()
+    }
+
+    pub(crate) fn target(&self) -> &T {
+        &crate::unwrap!(self.inner.as_ref()).target
     }
 }
 
@@ -349,6 +370,7 @@ pub trait Channel: private::Channel {
     /// was set with [`set_transfer_length`]. If the DMA is active, the value
     /// indicates the number of remaining bytes to be transmitted. This value
     /// is decremented by the hardware after each DMA transfer.
+    #[inline]
     fn get_remaining_transfer_len(&self) -> u16 {
         self.ch().ndtr.read().ndt().bits()
     }
@@ -377,7 +399,8 @@ pub trait Channel: private::Channel {
         });
     }
 
-    /// Set the priority level of this channel
+    /// Set the priority level of this channel to use software driven priority
+    /// management for DMA requests.
     fn set_priority_level(&mut self, priority: Priority) {
         let pl = priority.into();
         self.ch().cr.modify(|_, w| w.pl().variant(pl));
