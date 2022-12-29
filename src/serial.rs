@@ -1530,17 +1530,30 @@ where
         self.transfer.wait()
     }
 
+    /// Returns the current transfer length
+    pub fn transfer_len(&self) -> u16 {
+        self.transfer_len
+    }
+
     /// Check whether a DMA event was triggered.
     pub fn is_dma_event_triggered(&self, event: dma::Event) -> bool {
         self.transfer.is_event_triggered(event)
     }
 
-    /// Get the number of bytes received so far for the current DMA RX transfer.
-    pub fn received_bytes(&self) -> u16 {
+    /// Stop the DMA transfer while also returning the number of received bytes.
+    /// For a completed RX transfer, this should be the full transfer length.
+    /// For incomplete transfers, this can be used to retrieve the number of
+    /// received bytes.
+    pub fn stop_and_return_received_bytes(self) -> (B, C, T, u16) {
+        let transfer_len = self.transfer_len;
+        // Stop the DMA before reading the remaining transfer length because otherwise,
+        // the hardware might arbitrarily decrement the value.
+        let (b, c, t) = self.stop();
         // The DMA API and the decrement logic used by the hardware
         // enforces that the remaining transfer length is always equal or
         // smaller than the specified transfer length.
-        self.transfer_len - self.transfer.get_remaining_transfer_len()
+        let remaining_transfer_len = c.get_remaining_transfer_len();
+        (b, c, t, transfer_len - remaining_transfer_len)
     }
 }
 
