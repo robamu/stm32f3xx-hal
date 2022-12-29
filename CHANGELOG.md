@@ -22,7 +22,18 @@ No changes.
   the wrapper structs `SerialDmaTx` and `SerialDmaRx` instead of the direct
   DMA transfer struct. These allow checking the USART ISR events
   with `is_event_triggered` as well.
-
+- serial: The `serial::Event` enumeration was split into a `RxEvent` and `TxEvent`
+  enumeration. All API which previously expected an `Event` now has a RX and TX specific
+  variant as well. The `Event` enum still exists and simply wraps the two new
+  enumerations. It also implements the `From` conversion from the two new types.
+    - `configure_interrupt`: `configure_rx_interrupt` and `configure_tx_interrupt`
+    - (enumset): `configure_interrupts`: `configure_rx_interrupts` and `configure_tx_interrupts`
+    - `is_interrupt_configured`: `is_tx_interrupt_configured` and `is_rx_interrupt_configured`.
+    - (enumset) `configured_interrupts`: `configured_tx_interrupts` and `configured_rx_interrupts`
+      The original API now returns an `EnumSet<TxEvent>, EnumSet<RxEvent` tuple
+    - `is_event_triggered`: `is_rx_event_triggered` and `is_tx_event_triggered`
+    - (enumset) `triggered_events`: `triggered_tx_events` and `triggered_rx_events`
+      The original API now returns an `EnumSet<TxEvent>, EnumSet<RxEvent` tuple
 ### Fixed
 
 - serial: The previous DMA `write_all` implementation did use the DMA transfer completion

@@ -18,7 +18,7 @@ mod app {
         gpio::{self, Output, PushPull, AF7},
         pac,
         prelude::*,
-        serial::{Event, Serial},
+        serial::{RxEvent, Serial, TxEvent},
         Toggle,
     };
     use systick_monotonic::*;
@@ -81,7 +81,7 @@ mod app {
         pins.1.internal_pull_up(&mut gpioa.pupdr, true);
         let mut serial: SerialType =
             Serial::new(cx.device.USART1, pins, 19200.Bd(), clocks, &mut rcc.apb2);
-        serial.configure_interrupt(Event::ReceiveDataRegisterNotEmpty, Toggle::On);
+        serial.configure_rx_interrupt(RxEvent::ReceiveDataRegisterNotEmpty, Toggle::On);
 
         rprintln!("post init");
 
@@ -98,14 +98,14 @@ mod app {
         let serial = cx.local.serial;
         let dir = cx.local.dir;
 
-        if serial.is_event_triggered(Event::ReceiveDataRegisterNotEmpty) {
+        if serial.is_rx_event_triggered(RxEvent::ReceiveDataRegisterNotEmpty) {
             dir.set_high().unwrap();
-            serial.configure_interrupt(Event::ReceiveDataRegisterNotEmpty, Toggle::Off);
+            serial.configure_rx_interrupt(RxEvent::ReceiveDataRegisterNotEmpty, Toggle::Off);
             match serial.read() {
                 Ok(byte) => {
                     serial.write(byte).unwrap();
                     rprintln!("{:?}", char::from_u32(byte.into()).unwrap_or('?'));
-                    serial.configure_interrupt(Event::TransmissionComplete, Toggle::On);
+                    serial.configure_tx_interrupt(TxEvent::TransmissionComplete, Toggle::On);
                 }
                 Err(_error) => rprintln!("irq error"),
             };
@@ -114,17 +114,18 @@ mod app {
         // It is perfectly viable to just use `is_event_triggered` here,
         // but this is a showcase, to also be able to used `triggered_events`
         // and other functions enabled by the "enumset" feature.
-        let events = serial.triggered_events();
-        if events.contains(Event::TransmissionComplete) {
+        let tx_events = serial.triggered_tx_events();
+        if tx_events.contains(TxEvent::TransmissionComplete) {
             dir.set_low().unwrap();
             let interrupts = {
                 let mut interrupts = enumset::EnumSet::new();
-                interrupts.insert(Event::ReceiveDataRegisterNotEmpty);
+                interrupts.insert(RxEvent::ReceiveDataRegisterNotEmpty);
                 interrupts
             };
-            serial.clear_event(Event::TransmissionComplete);
+            serial.clear_tx_event(TxEvent::TransmissionComplete);
             // Disable all interrupts, except ReceiveDataRegisterNotEmpty.
-            serial.configure_interrupts(interrupts);
+            serial.configure_rx_interrupts(interrupts);
+            serial.configure_tx_interrupts(enumset::EnumSet::new());
         }
     }
 
