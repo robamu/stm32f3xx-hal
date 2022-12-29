@@ -95,7 +95,7 @@ pub enum RxEvent {
     ///
     /// This event is set by hardware when the data currently being received in the shift register
     /// is ready to be transferred into the RDR register while
-    /// [`Event::ReceiveDataRegisterNotEmpty`] is set.
+    /// [`RxEvent::ReceiveDataRegisterNotEmpty`] is set.
     ///
     /// See [`Error::Overrun`] for a more detailed description.
     #[doc(alias = "ORE")]
@@ -1011,8 +1011,8 @@ where
     /// Enable or disable overrun detection
     ///
     /// When overrun detection is disabled and new data is received while the
-    /// [`Event::ReceiveDataRegisterNotEmpty`] flag is still set,
-    /// the [`Event::OverrunError`] flag is not set and the new received data overwrites the
+    /// [`RxEvent::ReceiveDataRegisterNotEmpty`] flag is still set,
+    /// the [`RxEvent::OverrunError`] flag is not set and the new received data overwrites the
     /// previous content of the RDR register.
     #[doc(alias = "OVRDIS")]
     #[inline]
@@ -1026,7 +1026,7 @@ where
     /// Configuring the UART to match each received character,
     /// with the configured one.
     ///
-    /// If the character is matched [`Event::CharacterMatch`] is generated,
+    /// If the character is matched [`RxEvent::CharacterMatch`] is generated,
     /// which can fire an interrupt, if enabled via [`Serial::configure_interrupt()`]
     #[inline(always)]
     pub fn set_match_character(&mut self, char: u8) {
@@ -1051,7 +1051,7 @@ where
 {
     /// Set the receiver timeout value.
     ///
-    /// The RTOF flag ([`Event::ReceiverTimeout`]) is set if, after the last received character,
+    /// The RTOF flag ([`RxEvent::ReceiverTimeout`]) is set if, after the last received character,
     /// no new start bit is detected for more than the receiver timeout value, where the value
     /// is being a counter, which is decreased by the configured baud rate.
     ///
