@@ -34,6 +34,7 @@ No changes.
     - `is_event_triggered`: `is_rx_event_triggered` and `is_tx_event_triggered`
     - (enumset) `triggered_events`: `triggered_tx_events` and `triggered_rx_events`
       The original API now returns an `EnumSet<TxEvent>, EnumSet<RxEvent` tuple
+
 ### Fixed
 
 - serial: The previous DMA `write_all` implementation did use the DMA transfer completion
@@ -43,8 +44,15 @@ No changes.
 
 ## Added
 
-- serial: Public `is_event_triggered` method which allows to check for events
-  given an event and a USART reference.
+- serial: Public methods which take a (mutable) USART reference and then expose some
+  minimal API:
+    - `is_event_triggered`, `is_rx_event_triggered` and `is_tx_event_triggered`
+    - `clear_event`, `clear_tx_event` and `clear_rx_event`
+    - `configure_interrupt`, `configure_tx_nterrupt` and `configure_rx_interrupt`
+    - `is_interrupt_configured`, `is_tx_interrupt_configured`, `is_rx_interrupt_configured`
+- serial:  Add two helper methods on `Tx`: `configure_interrupt` and `clear_event`
+- serial:  Add two helper methods on `SerialDmaRx`: `is_dma_event_triggered` and `received_bytes`.
+  `received_bytes` returns the bytes received during a DMA transfer so far.
 
 ## [v0.9.1] - 2022-09-07
 
