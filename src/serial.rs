@@ -140,6 +140,28 @@ pub enum Event {
     // WakeupFromStopMode,
 }
 
+/// Check if an interrupt event happend.
+#[inline]
+pub fn is_event_triggered(uart: &impl Instance, event: Event) -> bool {
+    let isr = uart.isr.read();
+    match event {
+        Event::TransmitDataRegisterEmtpy => isr.txe().bit(),
+        Event::CtsInterrupt => isr.ctsif().bit(),
+        Event::TransmissionComplete => isr.tc().bit(),
+        Event::ReceiveDataRegisterNotEmpty => isr.rxne().bit(),
+        Event::OverrunError => isr.ore().bit(),
+        Event::Idle => isr.idle().bit(),
+        Event::ParityError => isr.pe().bit(),
+        Event::LinBreak => isr.lbdf().bit(),
+        Event::NoiseError => isr.nf().bit(),
+        Event::FramingError => isr.fe().bit(),
+        Event::CharacterMatch => isr.cmf().bit(),
+        Event::ReceiverTimeout => isr.rtof().bit(),
+        // Event::EndOfBlock => isr.eobf().bit(),
+        // Event::WakeupFromStopMode => isr.wuf().bit(),
+    }
+}
+
 /// Serial error
 ///
 /// As these are status events, they can be converted to [`Event`]s, via [`Into`].
@@ -332,7 +354,7 @@ pub struct Serial<Usart, Pins> {
 }
 
 mod split {
-    use super::Instance;
+    use super::{is_event_triggered, Event, Instance};
     /// Serial receiver
     #[derive(Debug)]
     #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -396,6 +418,14 @@ mod split {
         pub(crate) unsafe fn usart_mut(&mut self) -> &mut Usart {
             &mut self.usart
         }
+
+        /// Check if an interrupt event happend.
+        #[inline]
+        pub fn is_event_triggered(&self, event: Event) -> bool {
+            // Safety: We are only reading the ISR register here, which
+            // should not affect the RX half
+            is_event_triggered(unsafe { self.usart() }, event)
+        }
     }
 
     impl<Usart, Pin> Rx<Usart, Pin>
@@ -447,6 +477,14 @@ mod split {
         /// Same as in [`Self::usart()`].
         pub(crate) unsafe fn usart_mut(&mut self) -> &mut Usart {
             &mut self.usart
+        }
+
+        /// Check if an interrupt event happend.
+        #[inline]
+        pub fn is_event_triggered(&self, event: Event) -> bool {
+            // Safety: We are only reading the ISR register here, which
+            // should not affect the TX half
+            is_event_triggered(unsafe { self.usart() }, event)
         }
     }
 }
@@ -579,7 +617,7 @@ where
     ///
     /// ## Embedded HAL
     ///
-    /// To have a more managed way to read from the serial use the [`embeded_hal::serial::Read`]
+    /// To have a more managed way to read from the serial use the [`embedded_hal::serial::Read`]
     /// trait implementation.
     #[doc(alias = "RDR")]
     pub fn read_data_register(&self) -> Option<u8> {
@@ -714,23 +752,7 @@ where
     /// Check if an interrupt event happend.
     #[inline]
     pub fn is_event_triggered(&self, event: Event) -> bool {
-        let isr = self.usart.isr.read();
-        match event {
-            Event::TransmitDataRegisterEmtpy => isr.txe().bit(),
-            Event::CtsInterrupt => isr.ctsif().bit(),
-            Event::TransmissionComplete => isr.tc().bit(),
-            Event::ReceiveDataRegisterNotEmpty => isr.rxne().bit(),
-            Event::OverrunError => isr.ore().bit(),
-            Event::Idle => isr.idle().bit(),
-            Event::ParityError => isr.pe().bit(),
-            Event::LinBreak => isr.lbdf().bit(),
-            Event::NoiseError => isr.nf().bit(),
-            Event::FramingError => isr.fe().bit(),
-            Event::CharacterMatch => isr.cmf().bit(),
-            Event::ReceiverTimeout => isr.rtof().bit(),
-            // Event::EndOfBlock => isr.eobf().bit(),
-            // Event::WakeupFromStopMode => isr.wuf().bit(),
-        }
+        is_event_triggered(&self.usart, event)
     }
 
     /// Get an [`EnumSet`] of all fired interrupt events.
@@ -947,7 +969,7 @@ where
     /// up to the interrupt handler.
     ///
     /// To read out the content of the read register without internal error handling, use
-    /// [`Serial::read()`].
+    /// [`Serial::read_data_register`].
     /// ...
     // -> According to this API it should be skipped.
     fn read(&mut self) -> nb::Result<u8, Error> {
@@ -1063,7 +1085,7 @@ where
     Usart: Instance + Dma,
 {
     /// Fill the buffer with received data using DMA.
-    pub fn read_exact<B, C>(self, buffer: B, mut channel: C) -> dma::Transfer<B, C, Self>
+    pub fn read_exact<B, C>(self, buffer: B, mut channel: C) -> SerialDmaRx<B, C, Self>
     where
         Self: dma::OnChannel<C>,
         B: dma::WriteBuffer<Word = u8> + 'static,
@@ -1077,7 +1099,9 @@ where
             )
         };
 
-        dma::Transfer::start_write(buffer, channel, self)
+        SerialDmaRx {
+            transfer: dma::Transfer::start_write(buffer, channel, self),
+        }
     }
 }
 
@@ -1088,13 +1112,148 @@ where
 {
 }
 
+/// Thin wrapper struct over the DMA transfer struct.
+///
+/// This wrapper mostly exposes the [`dma::Transfer`] API but also also exposes
+/// an API to check for other USART ISR events during on-going transfers.
+pub struct SerialDmaRx<B: dma::WriteBuffer<Word = u8> + 'static, C: dma::Channel, T: dma::Target> {
+    transfer: dma::Transfer<B, C, T>,
+}
+
+impl<B, C, T> SerialDmaRx<B, C, T>
+where
+    B: dma::WriteBuffer<Word = u8>,
+    C: dma::Channel,
+    T: dma::Target,
+{
+    /// Call [`dma::Transfer::stop`].
+    pub fn stop(self) -> (B, C, T) {
+        self.transfer.stop()
+    }
+
+    /// Call [`dma::Transfer::is_complete`].
+    pub fn is_complete(&self) -> bool {
+        self.transfer.is_complete()
+    }
+
+    /// Call [`dma::Transfer::wait`].
+    pub fn wait(self) -> (B, C, T) {
+        self.transfer.wait()
+    }
+}
+
+impl<B, C, Usart, Pin> SerialDmaRx<B, C, Rx<Usart, Pin>>
+where
+    B: dma::WriteBuffer<Word = u8>,
+    C: dma::Channel,
+    Usart: Instance + Dma,
+    Pin: RxPin<Usart>,
+{
+    /// Check if an interrupt event happened.
+    pub fn is_event_triggered(&self, event: Event) -> bool {
+        self.transfer.target().is_event_triggered(event)
+    }
+}
+
+impl<B, C, Usart, Pins> SerialDmaRx<B, C, Serial<Usart, Pins>>
+where
+    B: dma::WriteBuffer<Word = u8>,
+    C: dma::Channel,
+    Usart: Instance + Dma,
+{
+    /// Check if an interrupt event happened.
+    pub fn is_event_triggered(&self, event: Event) -> bool {
+        self.transfer.target().is_event_triggered(event)
+    }
+}
+
+/// Thin wrapper struct over the DMA transfer struct.
+///
+/// This wrapper mostly exposes the [`dma::Transfer`] API but also implements
+/// some additional checks because the conditions for DMA transfer completion
+/// require that the USART TC ISR flag is set as well. It also exposes an API
+/// to check for other USART ISR events during ongoing transfers.
+pub struct SerialDmaTx<B: dma::ReadBuffer<Word = u8> + 'static, C: dma::Channel, T: dma::Target> {
+    transfer: dma::Transfer<B, C, T>,
+}
+
+impl<B, C, T> SerialDmaTx<B, C, T>
+where
+    B: dma::ReadBuffer<Word = u8>,
+    C: dma::Channel,
+    T: dma::Target,
+{
+    /// Calls [`dma::Transfer::stop`].
+    pub fn stop(self) -> (B, C, T) {
+        self.transfer.stop()
+    }
+}
+
+impl<B, C, Usart, Pin> SerialDmaTx<B, C, Tx<Usart, Pin>>
+where
+    Usart: Instance + Dma,
+    C: dma::Channel,
+    B: dma::ReadBuffer<Word = u8>,
+    Pin: TxPin<Usart>,
+{
+    /// Wrapper function which can be used to check transfer completion.
+    ///
+    /// In addition to checking the transfer completion of the DMA, it also checks that the
+    /// USART Transmission Complete flag was set by the hardware. According to RM0316 29.5.15, this
+    /// is required to avoid corrupting the last transmission before disabling the USART or entering
+    /// stop mode.
+    pub fn is_complete(&self) -> bool {
+        let target = self.transfer.target();
+        self.transfer.is_complete() && target.is_event_triggered(Event::TransmissionComplete)
+    }
+
+    /// Block until the transfer is complete. This function also uses
+    /// [`SerialDmaTx::is_complete`] to check that the USART TC flag was set by
+    /// the hardware.
+    pub fn wait(self) -> (B, C, Tx<Usart, Pin>) {
+        while !self.is_complete() {}
+        self.stop()
+    }
+
+    /// Check if an interrupt event happened.
+    pub fn is_event_triggered(&self, event: Event) -> bool {
+        self.transfer.target().is_event_triggered(event)
+    }
+}
+
+impl<B, C, Usart, Pins> SerialDmaTx<B, C, Serial<Usart, Pins>>
+where
+    Usart: Instance + Dma,
+    C: dma::Channel,
+    B: dma::ReadBuffer<Word = u8>,
+{
+    /// Wrapper function which can be used to check transfer completion.
+    ///
+    /// In addition to checking the transfer completion of the DMA, it also checks that the
+    /// USART Transmission Complete flag was set by the hardware. According to RM0316 29.5.15, this
+    /// is required to avoid corrupting the last transmission before disabling the USART or entering
+    /// stop mode.
+    pub fn is_complete(&self) -> bool {
+        let target = self.transfer.target();
+        self.transfer.is_complete() && target.is_event_triggered(Event::TransmissionComplete)
+    }
+
+    /// Block until the transfer is complete. This function also uses
+    /// [`SerialDmaTx::is_complete`] to check that the USART TC flag was set by
+    /// the hardware.
+    pub fn wait(self) -> (B, C, Serial<Usart, Pins>) {
+        while !self.is_complete() {}
+        self.stop()
+    }
+}
+
 impl<Usart, Pin> Tx<Usart, Pin>
 where
     Usart: Instance + Dma,
     Pin: TxPin<Usart>,
 {
     /// Transmit all data in the buffer using DMA.
-    pub fn write_all<B, C>(self, buffer: B, mut channel: C) -> dma::Transfer<B, C, Self>
+    pub fn write_all<B, C>(self, buffer: B, mut channel: C) -> SerialDmaTx<B, C, Self>
     where
         Self: dma::OnChannel<C>,
         B: dma::ReadBuffer<Word = u8> + 'static,
@@ -1108,7 +1267,9 @@ where
             )
         };
 
-        dma::Transfer::start_read(buffer, channel, self)
+        SerialDmaTx {
+            transfer: dma::Transfer::start_read(buffer, channel, self),
+        }
     }
 }
 
@@ -1156,7 +1317,7 @@ where
     Usart: Instance + Dma,
 {
     /// Fill the buffer with received data using DMA.
-    pub fn read_exact<B, C>(self, buffer: B, mut channel: C) -> dma::Transfer<B, C, Self>
+    pub fn read_exact<B, C>(self, buffer: B, mut channel: C) -> SerialDmaRx<B, C, Self>
     where
         Self: dma::OnChannel<C>,
         B: dma::WriteBuffer<Word = u8> + 'static,
@@ -1168,11 +1329,13 @@ where
                 .set_peripheral_address(&self.usart.rdr as *const _ as u32, dma::Increment::Disable)
         };
 
-        dma::Transfer::start_write(buffer, channel, self)
+        SerialDmaRx {
+            transfer: dma::Transfer::start_write(buffer, channel, self),
+        }
     }
 
     /// Transmit all data in the buffer using DMA.
-    pub fn write_all<B, C>(self, buffer: B, mut channel: C) -> dma::Transfer<B, C, Self>
+    pub fn write_all<B, C>(self, buffer: B, mut channel: C) -> SerialDmaTx<B, C, Self>
     where
         Self: dma::OnChannel<C>,
         B: dma::ReadBuffer<Word = u8> + 'static,
@@ -1184,7 +1347,9 @@ where
                 .set_peripheral_address(&self.usart.tdr as *const _ as u32, dma::Increment::Disable)
         };
 
-        dma::Transfer::start_read(buffer, channel, self)
+        SerialDmaTx {
+            transfer: dma::Transfer::start_read(buffer, channel, self),
+        }
     }
 }
 
