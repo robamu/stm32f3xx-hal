@@ -14,7 +14,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
-No changes.
+### Added
+
+- dma: Added `is_half_complete` and `is_event_triggered` methods
+  for `Transfer`
+- dma: Added `get_remaining_transfer_len` for the `Channel` trait
+  to read the NDTR register.
 
 ## [v0.9.1] - 2022-09-07
 
