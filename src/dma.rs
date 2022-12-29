@@ -165,7 +165,7 @@ impl<B, C: Channel, T: Target> Transfer<B, C, T> {
         self.stop()
     }
 
-    pub(crate) fn get_remaining_transfer_len(&self) -> u16 {
+    pub fn get_remaining_transfer_len(&self) -> u16 {
         crate::unwrap!(self.inner.as_ref())
             .channel
             .get_remaining_transfer_len()

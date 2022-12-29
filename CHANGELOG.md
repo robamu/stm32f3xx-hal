@@ -53,8 +53,10 @@ No changes.
 - serial:  Add complete helper method set for both `Tx` and `Rx`:
    - `is_event_triggered`, `clear_event`, `triggered_events` (enumset)
    - `configure_interrupt`, `is_interrupt_configured`, `configured_interrupts` (enumset)
-- serial:  Add two helper methods on `SerialDmaRx`: `is_dma_event_triggered` and `received_bytes`.
-  `received_bytes` returns the bytes received during a DMA transfer so far.
+- serial:  Add two helper methods on `SerialDmaRx`: `is_dma_event_triggered`,
+  `transfer_len`  which returns the configured transfer length. Also added additional
+  stop method `stop_and_return_received_bytes` which returns the bytes received so
+  far in the transfer.
 
 ## [v0.9.1] - 2022-09-07
 
