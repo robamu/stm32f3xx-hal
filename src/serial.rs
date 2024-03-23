@@ -1245,14 +1245,14 @@ where
 {
     fn enable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmar().enabled());
         });
     }
 
     fn disable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmar().disabled());
         });
     }
@@ -1265,14 +1265,14 @@ where
 {
     fn enable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmat().enabled());
         });
     }
 
     fn disable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmat().disabled());
         });
     }
