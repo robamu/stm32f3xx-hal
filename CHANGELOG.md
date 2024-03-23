@@ -14,7 +14,105 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
-No changes.
+### Changed
+
+- serial: The DMA functions `write_all` and `read_exact` now returns
+  the wrapper structs `SerialDmaTx` and `SerialDmaRx` instead of the direct
+  DMA transfer struct. These allow checking the USART ISR events
+  with `is_event_triggered` as well.
+- serial: The `serial::Event` enumeration was split into a `RxEvent` and `TxEvent`
+  enumeration. All API which previously expected an `Event` now has a RX and TX specific
+  variant as well. The `Event` enum still exists and simply wraps the two new
+  enumerations. It also implements the `From` conversion from the two new types.
+    - `configure_interrupt`: `configure_rx_interrupt` and `configure_tx_interrupt`
+    - (enumset): `configure_interrupts`: `configure_rx_interrupts` and `configure_tx_interrupts`
+    - `is_interrupt_configured`: `is_tx_interrupt_configured` and `is_rx_interrupt_configured`.
+    - (enumset) `configured_interrupts`: `configured_tx_interrupts` and `configured_rx_interrupts`
+      The original API now returns an `EnumSet<TxEvent>, EnumSet<RxEvent` tuple
+    - `is_event_triggered`: `is_rx_event_triggered` and `is_tx_event_triggered`
+    - (enumset) `triggered_events`: `triggered_tx_events` and `triggered_rx_events`
+      The original API now returns an `EnumSet<TxEvent>, EnumSet<RxEvent` tuple
+
+### Fixed
+
+- serial: The previous DMA `write_all` implementation did use the DMA transfer completion
+  event to check for transfer completion, but MCU datasheet specifies that the TC
+  flag of the USART peripheral should be checked for transfer completion to avoid
+  corruption of the last transfer. This is now done by the new `SerialDmaTx` wrapper.
+
+## Added
+
+- serial: Public methods which take a (mutable) USART reference and then expose some
+  minimal API:
+    - `is_event_triggered`, `is_rx_event_triggered` and `is_tx_event_triggered`
+    - `clear_event`, `clear_tx_event` and `clear_rx_event`
+    - `configure_interrupt`, `configure_tx_nterrupt` and `configure_rx_interrupt`
+    - `is_interrupt_configured`, `is_tx_interrupt_configured`, `is_rx_interrupt_configured`
+- serial:  Add complete helper method set for both `Tx` and `Rx`:
+   - `is_event_triggered`, `clear_event`, `triggered_events` (enumset)
+   - `configure_interrupt`, `is_interrupt_configured`, `configured_interrupts` (enumset)
+- serial:  Add two helper methods on `SerialDmaRx`: `is_dma_event_triggered`,
+  `transfer_len`  which returns the configured transfer length. Also added additional
+  stop method `stop_and_return_received_bytes` which returns the bytes received so
+  far in the transfer.
+- dma: Added `is_half_complete` and `is_event_triggered` methods
+  for `Transfer`
+- dma: Added `get_remaining_transfer_len` for the `Channel` trait
+  to read the NDTR register.
+- serial: Public `is_event_triggered` method which allows to check for events
+  given an event and a USART reference.
+## [v0.10.0] - 2023-11-30
+
+### Breaking changes
+
+- Update `stm32f3` pac to v0.15.1 ([#335])
+- Update `bxcan` pac to v0.7.0 ([#335])
+- Remove `Toggle` enum and use `Switch` instead for better naming purposes
+- Fix undefined behavior in SPI implementation ([#346])
+  - Add `num_traits::PrimInt` bounds to `Word`
+- Remove `Serial::split`, which possibly creates two mutable references two
+  one Serial instance, which could've caused UB. The use case of this function
+  was hard to find out anyway. ([#351])
+- Remove `defmt-*` features (`defmt` feature is still available), to finalize
+  migration from `defmt-0.2.x` -> `defmt-0.3.x`. ([#349])
+- Removed implicit `stm32-usbd` feature (use `usb` instead) ([#349])
+
+### Added
+
+- Add missing ADC channels ([#337] & [#345])
+- Add many `#[must_use]` instances ([#347])
+
+### Fixed
+
+- Fix wrong timer frequency calculation and unexpected panics ([#338])
+- Fixed integer saturation in Timer::start, see [#342] ([#356])
+
+### Changed
+
+- The PWM implementation was deprecated. There is not yet an alternative
+  implementation, but it is hard to maintain the current implementation
+  and not easy to verify if it is really a safe implementation.
+  It is also not consistent with the rest of the crates API. ([#352])
+- Use [critical-section] crate instead of `interrupt_free`, which is not always
+  sound. ([#350])
+  It is also not consistent with the rest of the crates API.
+- The MSRV was bumped to 1.60 ([#349])
+
+[critical-section]: https://github.com/rust-embedded/critical-section
+
+## [v0.9.2] - 2023-02-20
+
+### Added
+
+- Add missing ADC channels ([#337])
+
+### Fixed
+
+- Fix wrong timer frequency calculation and unexpected panics ([#338])
+
+### Changed
+
+- The MSRV was bumped to 1.59 ([#340])
 
 ## [v0.10.0] - 2023-11-30
 

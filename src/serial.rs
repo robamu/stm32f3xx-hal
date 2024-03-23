@@ -36,17 +36,16 @@ use enumset::{EnumSet, EnumSetType};
 
 use crate::dma;
 
-/// Interrupt and status events.
+/// Interrupt and status events for the USART transmitter (TX)
 ///
-/// All events can be cleared by [`Serial::clear_event`] or [`Serial::clear_events`].
+/// All events can be cleared by [`Serial::clear_tx_event`] or [`Serial::clear_events`].
 /// Some events are also cleared on other conditions.
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "enumset", derive(EnumSetType))]
 #[cfg_attr(not(feature = "enumset"), derive(Copy, Clone, PartialEq, Eq))]
 #[non_exhaustive]
-// TODO: Split up in transmission and reception events (RM0316 29.7)
-pub enum Event {
+pub enum TxEvent {
     /// Transmit data register empty / new data can be sent.
     ///
     /// This event is set by hardware when the content of the TDR register has been transferred
@@ -66,6 +65,24 @@ pub enum Event {
     /// It is cleared by [`Serial`]s [`serial::Write::write()`] implementaiton to the USART_TDR register.
     #[doc(alias = "TC")]
     TransmissionComplete,
+    // Framing error detected in smartcard mode.
+    // TODO SmartCard mode currently not implemented.
+    // This event is set by hardware when a de-synchronization, excessive noise or a break character
+    // is detected.
+    // #[doc(alias = "FE")]
+    // FramingError,
+}
+
+/// Interrupt and status events for the USART receiver (RX)
+///
+/// All events can be cleared by [`Serial::clear_rx_event`] or [`Serial::clear_events`].
+/// Some events are also cleared on other conditions.
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "enumset", derive(EnumSetType))]
+#[cfg_attr(not(feature = "enumset"), derive(Copy, Clone, PartialEq, Eq))]
+#[non_exhaustive]
+pub enum RxEvent {
     /// Read data register not empty / new data has been received.
     ///
     /// This event is set by hardware when the content of the RDR shift register has been
@@ -77,7 +94,7 @@ pub enum Event {
     ///
     /// This event is set by hardware when the data currently being received in the shift register
     /// is ready to be transferred into the RDR register while
-    /// [`Event::ReceiveDataRegisterNotEmpty`] is set.
+    /// [`RxEvent::ReceiveDataRegisterNotEmpty`] is set.
     ///
     /// See [`Error::Overrun`] for a more detailed description.
     #[doc(alias = "ORE")]
@@ -85,6 +102,7 @@ pub enum Event {
     /// Idle line state detected.
     ///
     /// This event is set by hardware when an Idle Line is detected.
+    #[doc(alias = "IDLE")]
     Idle,
     /// Parity error detected.
     ///
@@ -139,26 +157,290 @@ pub enum Event {
     // WakeupFromStopMode,
 }
 
-/// Check if an interrupt event happend.
+/// Wrapper enumeration for both transmitter and receiver events.
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Event {
+    /// USART receiver (RX) events
+    Rx(RxEvent),
+    /// USART transmitter (TX) events
+    Tx(TxEvent),
+}
+
+impl From<RxEvent> for Event {
+    fn from(rx: RxEvent) -> Self {
+        Self::Rx(rx)
+    }
+}
+
+impl From<TxEvent> for Event {
+    fn from(tx: TxEvent) -> Self {
+        Self::Tx(tx)
+    }
+}
+
+/// Check if a receiver (RX) interrupt event happend.
 #[inline]
-pub fn is_event_triggered(uart: &impl Instance, event: Event) -> bool {
+pub fn is_rx_event_triggered(uart: &impl Instance, event: RxEvent) -> bool {
     let isr = uart.isr.read();
     match event {
-        Event::TransmitDataRegisterEmtpy => isr.txe().bit(),
-        Event::CtsInterrupt => isr.ctsif().bit(),
-        Event::TransmissionComplete => isr.tc().bit(),
-        Event::ReceiveDataRegisterNotEmpty => isr.rxne().bit(),
-        Event::OverrunError => isr.ore().bit(),
-        Event::Idle => isr.idle().bit(),
-        Event::ParityError => isr.pe().bit(),
-        Event::LinBreak => isr.lbdf().bit(),
-        Event::NoiseError => isr.nf().bit(),
-        Event::FramingError => isr.fe().bit(),
-        Event::CharacterMatch => isr.cmf().bit(),
-        Event::ReceiverTimeout => isr.rtof().bit(),
+        RxEvent::ReceiveDataRegisterNotEmpty => isr.rxne().bit(),
+        RxEvent::OverrunError => isr.ore().bit(),
+        RxEvent::Idle => isr.idle().bit(),
+        RxEvent::ParityError => isr.pe().bit(),
+        RxEvent::LinBreak => isr.lbdf().bit(),
+        RxEvent::NoiseError => isr.nf().bit(),
+        RxEvent::FramingError => isr.fe().bit(),
+        RxEvent::CharacterMatch => isr.cmf().bit(),
+        RxEvent::ReceiverTimeout => isr.rtof().bit(),
         // Event::EndOfBlock => isr.eobf().bit(),
         // Event::WakeupFromStopMode => isr.wuf().bit(),
     }
+}
+
+/// Check if a transmitter (TX) interrupt event happend.
+#[inline]
+pub fn is_tx_event_triggered(uart: &impl Instance, event: TxEvent) -> bool {
+    let isr = uart.isr.read();
+    match event {
+        TxEvent::TransmitDataRegisterEmtpy => isr.txe().bit(),
+        TxEvent::CtsInterrupt => isr.ctsif().bit(),
+        TxEvent::TransmissionComplete => isr.tc().bit(),
+    }
+}
+
+/// Check if an interrupt event happend.
+#[inline]
+pub fn is_event_triggered(uart: &impl Instance, event: Event) -> bool {
+    match event {
+        Event::Rx(rx_event) => is_rx_event_triggered(uart, rx_event),
+        Event::Tx(tx_event) => is_tx_event_triggered(uart, tx_event),
+    }
+}
+
+/// Clear the given interrupt event flag for a given [`Event`] and USART instance
+#[inline]
+pub fn clear_event(usart: &mut impl Instance, event: Event) {
+    match event {
+        Event::Tx(tx_event) => clear_tx_event(usart, tx_event),
+        Event::Rx(rx_event) => clear_rx_event(usart, rx_event),
+    }
+}
+
+/// Clear a transmitter event.
+#[inline]
+pub fn clear_tx_event(usart: &mut impl Instance, event: TxEvent) {
+    usart.icr.write(|w| match event {
+        TxEvent::CtsInterrupt => w.ctscf().clear(),
+        TxEvent::TransmissionComplete => w.tccf().clear(),
+        // Do nothing with this event (only useful for Smartcard, which is not
+        // supported right now)
+        TxEvent::TransmitDataRegisterEmtpy => w,
+    });
+}
+
+/// Clear a receiver event.
+pub fn clear_rx_event(usart: &mut impl Instance, event: RxEvent) {
+    usart.icr.write(|w| match event {
+        RxEvent::OverrunError => w.orecf().clear(),
+        RxEvent::Idle => w.idlecf().clear(),
+        RxEvent::ParityError => w.pecf().clear(),
+        RxEvent::LinBreak => w.lbdcf().clear(),
+        RxEvent::NoiseError => w.ncf().clear(),
+        RxEvent::FramingError => w.fecf().clear(),
+        RxEvent::CharacterMatch => w.cmcf().clear(),
+        RxEvent::ReceiverTimeout => w.rtocf().clear(),
+        // Event::EndOfBlock => w.eobcf().clear(),
+        // Event::WakeupFromStopMode => w.wucf().clear(),
+        RxEvent::ReceiveDataRegisterNotEmpty => {
+            // Flush the register data queue, so that this even will not be thrown again.
+            usart.rqr.write(|w| w.rxfrq().set_bit());
+            w
+        }
+    });
+}
+
+/// Enables or disables an interrupt for a given event and USART instance.
+#[inline]
+pub fn configure_interrupt(usart: &mut impl Instance, event: Event, enable: impl Into<Switch>) {
+    match event {
+        Event::Tx(tx_event) => configure_tx_interrupt(usart, tx_event, enable),
+        Event::Rx(rx_event) => configure_rx_interrupt(usart, rx_event, enable),
+    }
+}
+
+/// Enable or disable the interrupt for the specified [`TxEvent`].
+#[inline]
+pub fn configure_tx_interrupt(
+    usart: &mut impl Instance,
+    event: TxEvent,
+    enable: impl Into<Switch>,
+) {
+    // Do a round way trip to be convert Into<Switch> -> bool
+    let enable: Switch = enable.into();
+    let enable: bool = enable.into();
+    match event {
+        TxEvent::TransmitDataRegisterEmtpy => usart.cr1.modify(|_, w| w.txeie().bit(enable)),
+        TxEvent::CtsInterrupt => usart.cr3.modify(|_, w| w.ctsie().bit(enable)),
+        TxEvent::TransmissionComplete => usart.cr1.modify(|_, w| w.tcie().bit(enable)),
+    }
+}
+
+/// Enable or disable the interrupt for the specified [`RxEvent`].
+#[inline]
+pub fn configure_rx_interrupt(
+    usart: &mut impl Instance,
+    event: RxEvent,
+    enable: impl Into<Switch>,
+) {
+    // Do a round way trip to be convert Into<Switch> -> bool
+    let enable: Switch = enable.into();
+    let enable: bool = enable.into();
+
+    match event {
+        RxEvent::ReceiveDataRegisterNotEmpty => usart.cr1.modify(|_, w| w.rxneie().bit(enable)),
+        RxEvent::ParityError => usart.cr1.modify(|_, w| w.peie().bit(enable)),
+        RxEvent::LinBreak => usart.cr2.modify(|_, w| w.lbdie().bit(enable)),
+        RxEvent::NoiseError | RxEvent::OverrunError | RxEvent::FramingError => {
+            usart.cr3.modify(|_, w| w.eie().bit(enable))
+        }
+        RxEvent::Idle => usart.cr1.modify(|_, w| w.idleie().bit(enable)),
+        RxEvent::CharacterMatch => usart.cr1.modify(|_, w| w.cmie().bit(enable)),
+        RxEvent::ReceiverTimeout => usart.cr1.modify(|_, w| w.rtoie().bit(enable)),
+        // Event::EndOfBlock => self.usart.cr1.modify(|_, w| w.eobie().bit(enable)),
+        // Event::WakeupFromStopMode => self.usart.cr3.modify(|_, w| w.wufie().bit(enable)),
+    };
+}
+
+/// Check whether a transmitter interrupt is enabled.
+#[inline]
+pub fn is_tx_interrupt_configured(usart: &impl Instance, event: TxEvent) -> bool {
+    match event {
+        TxEvent::TransmitDataRegisterEmtpy => usart.cr1.read().txeie().is_enabled(),
+        TxEvent::CtsInterrupt => usart.cr3.read().ctsie().is_enabled(),
+        TxEvent::TransmissionComplete => usart.cr1.read().tcie().is_enabled(),
+    }
+}
+
+/// Check whether a receiver interrupt was enabled.
+#[inline]
+pub fn is_rx_interrupt_configured(usart: &impl Instance, event: RxEvent) -> bool {
+    match event {
+        RxEvent::ReceiveDataRegisterNotEmpty => usart.cr1.read().rxneie().is_enabled(),
+        RxEvent::ParityError => usart.cr1.read().peie().is_enabled(),
+        RxEvent::LinBreak => usart.cr2.read().lbdie().is_enabled(),
+        RxEvent::NoiseError | RxEvent::OverrunError | RxEvent::FramingError => {
+            usart.cr3.read().eie().is_enabled()
+        }
+        RxEvent::Idle => usart.cr1.read().idleie().is_enabled(),
+        RxEvent::CharacterMatch => usart.cr1.read().cmie().is_enabled(),
+        RxEvent::ReceiverTimeout => usart.cr1.read().rtoie().is_enabled(),
+        // Event::EndOfBlock => self.usart.cr1.read().eobie().is_enabled(),
+        // Event::WakeupFromStopMode => self.usart.cr3.read().wufie().is_enabled(),
+    }
+}
+
+/// Check if an interrupt is configured for the [`Event`]
+#[inline]
+pub fn is_interrupt_configured(usart: &impl Instance, event: Event) -> bool {
+    match event {
+        Event::Rx(rx_event) => is_rx_interrupt_configured(usart, rx_event),
+        Event::Tx(tx_event) => is_tx_interrupt_configured(usart, tx_event),
+    }
+}
+
+/// Enable or disable interrupt for the specified [`TxEvent`]s.
+///
+/// Like [`Serial::configure_interrupt`], but instead using an enumset. The corresponding
+/// interrupt for every [`TxEvent`] in the set will be enabled, every other interrupt will be
+/// **disabled**.
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+pub fn configure_tx_interrupts(usart: &mut impl Instance, events: EnumSet<TxEvent>) {
+    for event in events.complement().iter() {
+        configure_tx_interrupt(usart, event, false);
+    }
+    for event in events.iter() {
+        configure_tx_interrupt(usart, event, true);
+    }
+}
+
+/// Enable or disable interrupt for the specified [`RxEvent`]s.
+///
+/// Like [`Serial::configure_interrupt`], but instead using an enumset. The corresponding
+/// interrupt for every [`RxEvent`] in the set will be enabled, every other interrupt will be
+/// **disabled**.
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+pub fn configure_rx_interrupts(usart: &mut impl Instance, events: EnumSet<RxEvent>) {
+    for event in events.complement().iter() {
+        configure_rx_interrupt(usart, event, false);
+    }
+    for event in events.iter() {
+        configure_rx_interrupt(usart, event, true);
+    }
+}
+
+/// Check which interrupts are enabled for all [`TxEvent`]s
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+#[inline]
+pub fn configured_tx_interrupts(usart: &impl Instance) -> EnumSet<TxEvent> {
+    let mut tx_events = EnumSet::new();
+
+    for event in EnumSet::<TxEvent>::all().iter() {
+        if is_tx_interrupt_configured(usart, event) {
+            tx_events |= event;
+        }
+    }
+
+    tx_events
+}
+
+/// Check which interrupts are enabled for all [`RxEvent`]s
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+#[inline]
+pub fn configured_rx_interrupts(usart: &impl Instance) -> EnumSet<RxEvent> {
+    let mut rx_events = EnumSet::new();
+
+    for event in EnumSet::<RxEvent>::all().iter() {
+        if is_rx_interrupt_configured(usart, event) {
+            rx_events |= event;
+        }
+    }
+
+    rx_events
+}
+
+/// Get an [`EnumSet`] of all fired [`RxEvent`]s
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+pub fn triggered_rx_events(usart: &impl Instance) -> EnumSet<RxEvent> {
+    let mut rx_events = EnumSet::new();
+
+    for event in EnumSet::<RxEvent>::all().iter() {
+        if is_rx_event_triggered(usart, event) {
+            rx_events |= event;
+        }
+    }
+
+    rx_events
+}
+
+/// Get an [`EnumSet`] of all fired [`TxEvent`]s
+#[cfg(feature = "enumset")]
+#[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+pub fn triggered_tx_events(usart: &impl Instance) -> EnumSet<TxEvent> {
+    let mut tx_events = EnumSet::new();
+
+    for event in EnumSet::<TxEvent>::all().iter() {
+        if is_tx_event_triggered(usart, event) {
+            tx_events |= event;
+        }
+    }
+
+    tx_events
 }
 
 /// Serial error
@@ -200,13 +482,13 @@ pub enum Error {
     Parity,
 }
 
-impl From<Error> for Event {
+impl From<Error> for RxEvent {
     fn from(error: Error) -> Self {
         match error {
-            Error::Framing => Event::FramingError,
-            Error::Overrun => Event::OverrunError,
-            Error::Noise => Event::NoiseError,
-            Error::Parity => Event::ParityError,
+            Error::Framing => RxEvent::FramingError,
+            Error::Overrun => RxEvent::OverrunError,
+            Error::Noise => RxEvent::NoiseError,
+            Error::Parity => RxEvent::ParityError,
         }
     }
 }
@@ -216,14 +498,14 @@ impl From<Error> for Event {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TryFromEventError(pub(crate) ());
 
-impl TryFrom<Event> for Error {
+impl TryFrom<RxEvent> for Error {
     type Error = TryFromEventError;
-    fn try_from(event: Event) -> Result<Self, Self::Error> {
+    fn try_from(event: RxEvent) -> Result<Self, Self::Error> {
         Ok(match event {
-            Event::FramingError => Error::Framing,
-            Event::OverrunError => Error::Overrun,
-            Event::NoiseError => Error::Noise,
-            Event::ParityError => Error::Parity,
+            RxEvent::FramingError => Error::Framing,
+            RxEvent::OverrunError => Error::Overrun,
+            RxEvent::NoiseError => Error::Noise,
+            RxEvent::ParityError => Error::Parity,
             _ => return Err(TryFromEventError(())),
         })
     }
@@ -353,7 +635,7 @@ pub struct Serial<Usart, Pins> {
 }
 
 mod split {
-    use super::{is_event_triggered, Event, Instance};
+    use super::*;
     /// Serial receiver
     #[derive(Debug)]
     #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -420,10 +702,51 @@ mod split {
 
         /// Check if an interrupt event happend.
         #[inline]
-        pub fn is_event_triggered(&self, event: Event) -> bool {
-            // Safety: We are only reading the ISR register here, which
-            // should not affect the RX half
-            is_event_triggered(unsafe { self.usart() }, event)
+        pub fn is_event_triggered(&self, event: TxEvent) -> bool {
+            // Safety: Only reads TX specific events, should not be influenced
+            // by RX half
+            is_tx_event_triggered(unsafe { self.usart() }, event)
+        }
+
+        /// Enables or disables an interrupt for a given [`TxEvent`].
+        #[inline]
+        pub fn configure_interrupt(&mut self, event: TxEvent, enable: impl Into<crate::Switch>) {
+            // Safety: Only configures TX specific interrupts, which should not interfere
+            // with the RX half
+            configure_tx_interrupt(unsafe { self.usart_mut() }, event, enable)
+        }
+
+        /// Checks whether a transmitter interrupt is enabled.
+        #[inline]
+        pub fn is_interrupt_configured(&self, event: TxEvent) -> bool {
+            // Safety: Only reads TX specific interrupts, should not be influenced
+            // by RX half
+            is_tx_interrupt_configured(unsafe { self.usart() }, event)
+        }
+
+        /// Clears the given interrupt.
+        #[inline]
+        pub fn clear_event(&mut self, event: TxEvent) {
+            // Safety: Only clears TX specific interrupts, which should not interfere
+            // with the RX half
+            clear_tx_event(unsafe { self.usart_mut() }, event)
+        }
+
+        /// Check which interrupts are enabled for all [`TxEvent`]s
+        #[cfg(feature = "enumset")]
+        #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+        #[inline]
+        pub fn configured_interrupts(&self) -> EnumSet<TxEvent> {
+            // Safety: Only reads TX specific interrupts, should not be influenced
+            // by RX half
+            configured_tx_interrupts(unsafe { self.usart() })
+        }
+
+        /// Get a tuple of [`EnumSet`]s of all fired interrupt events.
+        #[cfg(feature = "enumset")]
+        #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+        pub fn triggered_events(&self) -> EnumSet<TxEvent> {
+            triggered_tx_events(unsafe { self.usart() })
         }
     }
 
@@ -480,10 +803,51 @@ mod split {
 
         /// Check if an interrupt event happend.
         #[inline]
-        pub fn is_event_triggered(&self, event: Event) -> bool {
-            // Safety: We are only reading the ISR register here, which
-            // should not affect the TX half
-            is_event_triggered(unsafe { self.usart() }, event)
+        pub fn is_event_triggered(&self, event: RxEvent) -> bool {
+            // Safety: Only reads RX specific events, should not be influenced
+            // by TX half
+            is_rx_event_triggered(unsafe { self.usart() }, event)
+        }
+
+        /// Enables or disables an interrupt for a given [`RxEvent`].
+        #[inline]
+        pub fn configure_interrupt(&mut self, event: RxEvent, enable: impl Into<crate::Switch>) {
+            // Safety: Only configures RX specific interrupts, which should not interfere
+            // with the TX half
+            configure_rx_interrupt(unsafe { self.usart_mut() }, event, enable)
+        }
+
+        /// Checks whether a transmitter interrupt is enabled.
+        #[inline]
+        pub fn is_interrupt_configured(&self, event: RxEvent) -> bool {
+            // Safety: Only reads RX specific interrupts, should not be influenced
+            // by TX half
+            is_rx_interrupt_configured(unsafe { self.usart() }, event)
+        }
+
+        /// Clears the given interrupt.
+        #[inline]
+        pub fn clear_event(&mut self, event: RxEvent) {
+            // Safety: Only clears RX specific interrupts, which should not interfere
+            // with the TX half
+            clear_rx_event(unsafe { self.usart_mut() }, event)
+        }
+
+        /// Check which interrupts are enabled for all [`RxEvent`]s
+        #[cfg(feature = "enumset")]
+        #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+        #[inline]
+        pub fn configured_interrupts(&self) -> EnumSet<RxEvent> {
+            // Safety: Only reads RX specific interrupts, should not be influenced
+            // by TX half
+            configured_rx_interrupts(unsafe { self.usart() })
+        }
+
+        /// Get a tuple of [`EnumSet`]s of all fired interrupt events.
+        #[cfg(feature = "enumset")]
+        #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+        pub fn triggered_events(&self) -> EnumSet<RxEvent> {
+            triggered_rx_events(unsafe { self.usart() })
         }
     }
 }
@@ -653,80 +1017,86 @@ where
     /// Enable or disable the interrupt for the specified [`Event`].
     #[inline]
     pub fn configure_interrupt(&mut self, event: Event, enable: impl Into<Switch>) {
-        // Do a round way trip to be convert Into<Switch> -> bool
-        let enable: Switch = enable.into();
-        let enable: bool = enable.into();
-        match event {
-            Event::TransmitDataRegisterEmtpy => self.usart.cr1.modify(|_, w| w.txeie().bit(enable)),
-            Event::CtsInterrupt => self.usart.cr3.modify(|_, w| w.ctsie().bit(enable)),
-            Event::TransmissionComplete => self.usart.cr1.modify(|_, w| w.tcie().bit(enable)),
-            Event::ReceiveDataRegisterNotEmpty => {
-                self.usart.cr1.modify(|_, w| w.rxneie().bit(enable));
-            }
-            Event::ParityError => self.usart.cr1.modify(|_, w| w.peie().bit(enable)),
-            Event::LinBreak => self.usart.cr2.modify(|_, w| w.lbdie().bit(enable)),
-            Event::NoiseError | Event::OverrunError | Event::FramingError => {
-                self.usart.cr3.modify(|_, w| w.eie().bit(enable));
-            }
-            Event::Idle => self.usart.cr1.modify(|_, w| w.idleie().bit(enable)),
-            Event::CharacterMatch => self.usart.cr1.modify(|_, w| w.cmie().bit(enable)),
-            Event::ReceiverTimeout => self.usart.cr1.modify(|_, w| w.rtoie().bit(enable)),
-            // Event::EndOfBlock => self.usart.cr1.modify(|_, w| w.eobie().bit(enable)),
-            // Event::WakeupFromStopMode => self.usart.cr3.modify(|_, w| w.wufie().bit(enable)),
-        };
+        configure_interrupt(&mut self.usart, event, enable)
     }
 
-    /// Enable or disable interrupt for the specified [`Event`]s.
+    /// Enable or disable the interrupt for the specified [`TxEvent`].
+    #[inline]
+    pub fn configure_tx_interrupt(&mut self, event: TxEvent, enable: impl Into<Switch>) {
+        configure_tx_interrupt(&mut self.usart, event, enable)
+    }
+
+    /// Enable or disable the interrupt for the specified [`RxEvent`].
+    #[inline]
+    pub fn configure_rx_interrupt(&mut self, event: RxEvent, enable: impl Into<Switch>) {
+        configure_rx_interrupt(&mut self.usart, event, enable)
+    }
+
+    /// Enable or disable interrupt for the specified [`TxEvent`]s.
     ///
     /// Like [`Serial::configure_interrupt`], but instead using an enumset. The corresponding
-    /// interrupt for every [`Event`] in the set will be enabled, every other interrupt will be
+    /// interrupt for every [`TxEvent`] in the set will be enabled, every other interrupt will be
     /// **disabled**.
     #[cfg(feature = "enumset")]
     #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
-    pub fn configure_interrupts(&mut self, events: EnumSet<Event>) {
-        for event in events.complement().iter() {
-            self.configure_interrupt(event, false);
-        }
-        for event in events.iter() {
-            self.configure_interrupt(event, true);
-        }
+    pub fn configure_tx_interrupts(&mut self, events: EnumSet<TxEvent>) {
+        configure_tx_interrupts(&mut self.usart, events)
+    }
+
+    /// Enable or disable interrupt for the specified [`RxEvent`]s.
+    ///
+    /// Like [`Serial::configure_interrupt`], but instead using an enumset. The corresponding
+    /// interrupt for every [`RxEvent`] in the set will be enabled, every other interrupt will be
+    /// **disabled**.
+    #[cfg(feature = "enumset")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+    pub fn configure_rx_interrupts(&mut self, events: EnumSet<RxEvent>) {
+        configure_rx_interrupts(&mut self.usart, events)
+    }
+
+    /// Check whether a transmitter interrupt was enabled.
+    #[inline]
+    pub fn is_tx_interrupt_configured(&self, event: TxEvent) -> bool {
+        is_tx_interrupt_configured(&self.usart, event)
+    }
+
+    /// Check whether a receiver interrupt was enabled.
+    #[inline]
+    pub fn is_rx_interrupt_configured(&self, event: RxEvent) -> bool {
+        is_rx_interrupt_configured(&self.usart, event)
     }
 
     /// Check if an interrupt is configured for the [`Event`]
     #[inline]
     pub fn is_interrupt_configured(&self, event: Event) -> bool {
-        match event {
-            Event::TransmitDataRegisterEmtpy => self.usart.cr1.read().txeie().is_enabled(),
-            Event::CtsInterrupt => self.usart.cr3.read().ctsie().is_enabled(),
-            Event::TransmissionComplete => self.usart.cr1.read().tcie().is_enabled(),
-            Event::ReceiveDataRegisterNotEmpty => self.usart.cr1.read().rxneie().is_enabled(),
-            Event::ParityError => self.usart.cr1.read().peie().is_enabled(),
-            Event::LinBreak => self.usart.cr2.read().lbdie().is_enabled(),
-            Event::NoiseError | Event::OverrunError | Event::FramingError => {
-                self.usart.cr3.read().eie().is_enabled()
-            }
-            Event::Idle => self.usart.cr1.read().idleie().is_enabled(),
-            Event::CharacterMatch => self.usart.cr1.read().cmie().is_enabled(),
-            Event::ReceiverTimeout => self.usart.cr1.read().rtoie().is_enabled(),
-            // Event::EndOfBlock => self.usart.cr1.read().eobie().is_enabled(),
-            // Event::WakeupFromStopMode => self.usart.cr3.read().wufie().is_enabled(),
-        }
+        is_interrupt_configured(&self.usart, event)
     }
 
     /// Check which interrupts are enabled for all [`Event`]s
     #[cfg(feature = "enumset")]
     #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
     #[inline]
-    pub fn configured_interrupts(&mut self) -> EnumSet<Event> {
-        let mut events = EnumSet::new();
+    pub fn configured_interrupts(&mut self) -> (EnumSet<TxEvent>, EnumSet<RxEvent>) {
+        (
+            self.configured_tx_interrupts(),
+            self.configured_rx_interrupts(),
+        )
+    }
 
-        for event in EnumSet::<Event>::all().iter() {
-            if self.is_interrupt_configured(event) {
-                events |= event;
-            }
-        }
+    /// Check which interrupts are enabled for all [`TxEvent`]s
+    #[cfg(feature = "enumset")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+    #[inline]
+    pub fn configured_tx_interrupts(&self) -> EnumSet<TxEvent> {
+        configured_tx_interrupts(&self.usart)
+    }
 
-        events
+    /// Check which interrupts are enabled for all [`RxEvent`]s
+    #[cfg(feature = "enumset")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+    #[inline]
+    pub fn configured_rx_interrupts(&mut self) -> EnumSet<RxEvent> {
+        configured_rx_interrupts(&self.usart)
     }
 
     /// Check if an interrupt event happend.
@@ -735,56 +1105,70 @@ where
         is_event_triggered(&self.usart, event)
     }
 
-    /// Get an [`EnumSet`] of all fired interrupt events.
+    /// Check if a reception (RX) interrupt event was triggered.
+    #[inline]
+    pub fn is_rx_event_triggered(&self, event: RxEvent) -> bool {
+        is_rx_event_triggered(&self.usart, event)
+    }
+
+    /// Check if a transmission (TX) interrupt event was triggered.
+    #[inline]
+    pub fn is_tx_event_triggered(&self, event: TxEvent) -> bool {
+        is_tx_event_triggered(&self.usart, event)
+    }
+
+    /// Get a tuple of [`EnumSet`]s of all fired interrupt events.
     ///
     /// # Examples
     ///
     /// This allows disabling all fired event at once, via the enum set abstraction, like so
     ///
     /// ```rust
-    /// for event in serial.events() {
+    /// let (tx_events, rx_events) = serial.triggered_events();
+    /// for event in tx_events {
+    ///     serial.listen(event, false);
+    /// }
+    /// for event in rx_events {
     ///     serial.listen(event, false);
     /// }
     /// ```
     #[cfg(feature = "enumset")]
     #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
-    pub fn triggered_events(&self) -> EnumSet<Event> {
-        let mut events = EnumSet::new();
-
-        for event in EnumSet::<Event>::all().iter() {
-            if self.is_event_triggered(event) {
-                events |= event;
-            }
-        }
-
-        events
+    pub fn triggered_events(&self) -> (EnumSet<TxEvent>, EnumSet<RxEvent>) {
+        (self.triggered_tx_events(), self.triggered_rx_events())
     }
 
-    /// Clear the given interrupt event flag.
+    /// Get an [`EnumSet`] of all fired [`RxEvent`]s
+    #[cfg(feature = "enumset")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+    pub fn triggered_rx_events(&self) -> EnumSet<RxEvent> {
+        triggered_rx_events(&self.usart)
+    }
+
+    /// Get an [`EnumSet`] of all fired [`TxEvent`]s
+    #[cfg(feature = "enumset")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "enumset")))]
+    pub fn triggered_tx_events(&self) -> EnumSet<TxEvent> {
+        triggered_tx_events(&self.usart)
+    }
+
+    /// Clear an event.
     #[inline]
     pub fn clear_event(&mut self, event: Event) {
-        self.usart.icr.write(|w| match event {
-            Event::CtsInterrupt => w.ctscf().clear(),
-            Event::TransmissionComplete => w.tccf().clear(),
-            Event::OverrunError => w.orecf().clear(),
-            Event::Idle => w.idlecf().clear(),
-            Event::ParityError => w.pecf().clear(),
-            Event::LinBreak => w.lbdcf().clear(),
-            Event::NoiseError => w.ncf().clear(),
-            Event::FramingError => w.fecf().clear(),
-            Event::CharacterMatch => w.cmcf().clear(),
-            Event::ReceiverTimeout => w.rtocf().clear(),
-            // Event::EndOfBlock => w.eobcf().clear(),
-            // Event::WakeupFromStopMode => w.wucf().clear(),
-            Event::ReceiveDataRegisterNotEmpty => {
-                // Flush the register data queue, so that this even will not be thrown again.
-                self.usart.rqr.write(|w| w.rxfrq().set_bit());
-                w
-            }
-            // Do nothing with this event (only useful for Smartcard, which is not
-            // supported right now)
-            Event::TransmitDataRegisterEmtpy => w,
-        });
+        match event {
+            Event::Tx(tx_event) => self.clear_tx_event(tx_event),
+            Event::Rx(rx_event) => self.clear_rx_event(rx_event),
+        }
+    }
+    /// Clear a transmitter event.
+    #[inline]
+    pub fn clear_tx_event(&mut self, event: TxEvent) {
+        clear_tx_event(&mut self.usart, event)
+    }
+
+    /// Clear a receiver event.
+    pub fn clear_rx_event(&mut self, event: RxEvent) {
+        clear_rx_event(&mut self.usart, event)
     }
 
     /// Clear **all** interrupt events.
@@ -797,8 +1181,8 @@ where
     /// Enable or disable overrun detection
     ///
     /// When overrun detection is disabled and new data is received while the
-    /// [`Event::ReceiveDataRegisterNotEmpty`] flag is still set,
-    /// the [`Event::OverrunError`] flag is not set and the new received data overwrites the
+    /// [`RxEvent::ReceiveDataRegisterNotEmpty`] flag is still set,
+    /// the [`RxEvent::OverrunError`] flag is not set and the new received data overwrites the
     /// previous content of the RDR register.
     #[doc(alias = "OVRDIS")]
     #[inline]
@@ -835,7 +1219,7 @@ where
 {
     /// Set the receiver timeout value.
     ///
-    /// The RTOF flag ([`Event::ReceiverTimeout`]) is set if, after the last received character,
+    /// The RTOF flag ([`RxEvent::ReceiverTimeout`]) is set if, after the last received character,
     /// no new start bit is detected for more than the receiver timeout value, where the value
     /// is being a counter, which is decreased by the configured baud rate.
     ///
@@ -1051,7 +1435,7 @@ where
     Usart: Instance + Dma,
 {
     /// Fill the buffer with received data using DMA.
-    pub fn read_exact<B, C>(self, buffer: B, mut channel: C) -> SerialDmaRx<B, C, Self>
+    pub fn read_exact<B, C>(self, mut buffer: B, mut channel: C) -> SerialDmaRx<B, C, Self>
     where
         Self: dma::OnChannel<C>,
         B: dma::WriteBuffer<Word = u8> + 'static,
@@ -1065,8 +1449,12 @@ where
             )
         };
 
+        // Safety: It is okay to call [`write_buffer'] multiple times as specified
+        // in its safety note.
+        let transfer_len = unsafe { buffer.write_buffer().1 } as u16;
         SerialDmaRx {
             transfer: dma::Transfer::start_write(buffer, channel, self),
+            transfer_len,
         }
     }
 }
@@ -1084,6 +1472,7 @@ where
 /// an API to check for other USART ISR events during on-going transfers.
 pub struct SerialDmaRx<B: dma::WriteBuffer<Word = u8> + 'static, C: dma::Channel, T: dma::Target> {
     transfer: dma::Transfer<B, C, T>,
+    transfer_len: u16,
 }
 
 impl<B, C, T> SerialDmaRx<B, C, T>
@@ -1106,6 +1495,32 @@ where
     pub fn wait(self) -> (B, C, T) {
         self.transfer.wait()
     }
+
+    /// Returns the current transfer length
+    pub fn transfer_len(&self) -> u16 {
+        self.transfer_len
+    }
+
+    /// Check whether a DMA event was triggered.
+    pub fn is_dma_event_triggered(&self, event: dma::Event) -> bool {
+        self.transfer.is_event_triggered(event)
+    }
+
+    /// Stop the DMA transfer while also returning the number of received bytes.
+    /// For a completed RX transfer, this should be the full transfer length.
+    /// For incomplete transfers, this can be used to retrieve the number of
+    /// received bytes.
+    pub fn stop_and_return_received_bytes(self) -> (B, C, T, u16) {
+        let transfer_len = self.transfer_len;
+        // Stop the DMA before reading the remaining transfer length because otherwise,
+        // the hardware might arbitrarily decrement the value.
+        let (b, c, t) = self.stop();
+        // The DMA API and the decrement logic used by the hardware
+        // enforces that the remaining transfer length is always equal or
+        // smaller than the specified transfer length.
+        let remaining_transfer_len = c.get_remaining_transfer_len();
+        (b, c, t, transfer_len - remaining_transfer_len)
+    }
 }
 
 impl<B, C, Usart, Pin> SerialDmaRx<B, C, Rx<Usart, Pin>>
@@ -1116,7 +1531,7 @@ where
     Pin: RxPin<Usart>,
 {
     /// Check if an interrupt event happened.
-    pub fn is_event_triggered(&self, event: Event) -> bool {
+    pub fn is_event_triggered(&self, event: RxEvent) -> bool {
         self.transfer.target().is_event_triggered(event)
     }
 }
@@ -1163,14 +1578,13 @@ where
     Pin: TxPin<Usart>,
 {
     /// Wrapper function which can be used to check transfer completion.
-    ///
-    /// In addition to checking the transfer completion of the DMA, it also checks that the
-    /// USART Transmission Complete flag was set by the hardware. According to RM0316 29.5.15, this
-    /// is required to avoid corrupting the last transmission before disabling the USART or entering
-    /// stop mode.
+    /// In addition to checking the transfer completion of the DMA, it also
+    /// checks that the USART Transmission Complete flag was set by the hardware.
+    /// This is required to avoid corrupting the last transmission before
+    /// disabling the USART or entering stop mode.
     pub fn is_complete(&self) -> bool {
         let target = self.transfer.target();
-        self.transfer.is_complete() && target.is_event_triggered(Event::TransmissionComplete)
+        self.transfer.is_complete() && target.is_event_triggered(TxEvent::TransmissionComplete)
     }
 
     /// Block until the transfer is complete. This function also uses
@@ -1181,8 +1595,13 @@ where
         self.stop()
     }
 
+    /// Check whether a DMA event was triggered.
+    pub fn is_dma_event_triggered(&self, event: dma::Event) -> bool {
+        self.transfer.is_event_triggered(event)
+    }
+
     /// Check if an interrupt event happened.
-    pub fn is_event_triggered(&self, event: Event) -> bool {
+    pub fn is_event_triggered(&self, event: TxEvent) -> bool {
         self.transfer.target().is_event_triggered(event)
     }
 }
@@ -1194,14 +1613,13 @@ where
     B: dma::ReadBuffer<Word = u8>,
 {
     /// Wrapper function which can be used to check transfer completion.
-    ///
-    /// In addition to checking the transfer completion of the DMA, it also checks that the
-    /// USART Transmission Complete flag was set by the hardware. According to RM0316 29.5.15, this
-    /// is required to avoid corrupting the last transmission before disabling the USART or entering
-    /// stop mode.
+    /// In addition to checking the transfer completion of the DMA, it also
+    /// checks that the Transmission Complete flag was set by the hardware.
+    /// This is required to avoid corrupting the last transmission before
+    /// disabling the USART or entering stop mode.
     pub fn is_complete(&self) -> bool {
         let target = self.transfer.target();
-        self.transfer.is_complete() && target.is_event_triggered(Event::TransmissionComplete)
+        self.transfer.is_complete() && target.is_tx_event_triggered(TxEvent::TransmissionComplete)
     }
 
     /// Block until the transfer is complete. This function also uses
@@ -1245,14 +1663,14 @@ where
 {
     fn enable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmar().enabled());
         });
     }
 
     fn disable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmar().disabled());
         });
     }
@@ -1265,14 +1683,14 @@ where
 {
     fn enable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmat().enabled());
         });
     }
 
     fn disable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmat().disabled());
         });
     }
@@ -1283,7 +1701,7 @@ where
     Usart: Instance + Dma,
 {
     /// Fill the buffer with received data using DMA.
-    pub fn read_exact<B, C>(self, buffer: B, mut channel: C) -> SerialDmaRx<B, C, Self>
+    pub fn read_exact<B, C>(self, mut buffer: B, mut channel: C) -> SerialDmaRx<B, C, Self>
     where
         Self: dma::OnChannel<C>,
         B: dma::WriteBuffer<Word = u8> + 'static,
@@ -1297,8 +1715,12 @@ where
             );
         };
 
+        // Safety: It is okay to call [`write_buffer'] multiple times as specified
+        // in its safety note.
+        let transfer_len = unsafe { buffer.write_buffer().1 } as u16;
         SerialDmaRx {
             transfer: dma::Transfer::start_write(buffer, channel, self),
+            transfer_len,
         }
     }
 
@@ -1378,6 +1800,34 @@ macro_rules! usart {
             impl crate::interrupts::InterruptNumber for $USARTX {
                 type Interrupt = Interrupt;
                 const INTERRUPT: Interrupt = $INTERRUPT;
+            }
+
+            impl<Tx, Rx> Serial<$USARTX, (Tx, Rx)>
+                where Tx: TxPin<$USARTX>, Rx: RxPin<$USARTX> {
+                /// Splits the [`Serial`] abstraction into a transmitter and a receiver half.
+                ///
+                /// This allows using [`Tx`] and [`Rx`] related actions to
+                /// be handled independently and even use these safely in different
+                /// contexts (like interrupt routines) without needing to do synchronization work
+                /// between them.
+                pub fn split(self) -> (split::Tx<$USARTX, Tx>, split::Rx<$USARTX, Rx>) {
+                    // NOTE(unsafe): This essentially duplicates the USART peripheral
+                    //
+                    // As RX and TX both do have direct access to the peripheral,
+                    // they must guarantee to only do atomic operations on the peripheral
+                    // registers to avoid data races.
+                    //
+                    // Tx and Rx won't access the same registers anyways,
+                    // as they have independent responsibilities, which are NOT represented
+                    // in the type system.
+                    let (tx, rx) = unsafe {
+                        (
+                            crate::pac::Peripherals::steal().$USARTX,
+                            crate::pac::Peripherals::steal().$USARTX,
+                        )
+                    };
+                    (split::Tx::new(tx, self.pins.0), split::Rx::new(rx, self.pins.1))
+                }
             }
 
             #[cfg(feature = "defmt")]
