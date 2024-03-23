@@ -17,14 +17,14 @@ use crate::{
     gpio::{gpioa, gpiob, gpioc, AF7},
     hal::{blocking, serial, serial::Write},
     pac::{
-        self,
         rcc::cfgr3::USART1SW_A,
         usart1::{cr1::M_A, cr1::PCE_A, cr1::PS_A, RegisterBlock},
         Interrupt, USART1, USART2, USART3,
     },
     rcc::{self, Clocks},
-    time::rate::*,
-    Toggle,
+    time::fixed_point::FixedPoint,
+    time::rate::{Baud, Hertz},
+    Switch,
 };
 
 #[allow(unused_imports)]
@@ -35,7 +35,6 @@ use cfg_if::cfg_if;
 use enumset::{EnumSet, EnumSetType};
 
 use crate::dma;
-use cortex_m::interrupt;
 
 /// Interrupt and status events for the USART transmitter (TX)
 ///
@@ -531,14 +530,14 @@ pub enum BaudTable {
 impl From<BaudTable> for Baud {
     fn from(baud: BaudTable) -> Self {
         match baud {
-            BaudTable::Bd1200 => Baud(1200),
-            BaudTable::Bd9600 => Baud(9600),
-            BaudTable::Bd19200 => Baud(19200),
-            BaudTable::Bd38400 => Baud(38400),
-            BaudTable::Bd57600 => Baud(57600),
-            BaudTable::Bd115200 => Baud(115200),
-            BaudTable::Bd230400 => Baud(230400),
-            BaudTable::Bd460800 => Baud(460800),
+            BaudTable::Bd1200 => Baud(1_200),
+            BaudTable::Bd9600 => Baud(9_600),
+            BaudTable::Bd19200 => Baud(19_200),
+            BaudTable::Bd38400 => Baud(38_400),
+            BaudTable::Bd57600 => Baud(57_600),
+            BaudTable::Bd115200 => Baud(115_200),
+            BaudTable::Bd230400 => Baud(230_400),
+            BaudTable::Bd460800 => Baud(460_800),
         }
     }
 }
@@ -552,14 +551,14 @@ impl TryFrom<Baud> for BaudTable {
     type Error = TryFromBaudError;
     fn try_from(baud: Baud) -> Result<Self, Self::Error> {
         Ok(match baud {
-            Baud(1200) => BaudTable::Bd1200,
-            Baud(9600) => BaudTable::Bd9600,
-            Baud(19200) => BaudTable::Bd19200,
-            Baud(38400) => BaudTable::Bd38400,
-            Baud(57600) => BaudTable::Bd57600,
-            Baud(115200) => BaudTable::Bd115200,
-            Baud(230400) => BaudTable::Bd230400,
-            Baud(460800) => BaudTable::Bd460800,
+            Baud(1_200) => BaudTable::Bd1200,
+            Baud(9_600) => BaudTable::Bd9600,
+            Baud(19_200) => BaudTable::Bd19200,
+            Baud(38_400) => BaudTable::Bd38400,
+            Baud(57_600) => BaudTable::Bd57600,
+            Baud(115_200) => BaudTable::Bd115200,
+            Baud(230_400) => BaudTable::Bd230400,
+            Baud(460_800) => BaudTable::Bd460800,
             _ => return Err(TryFromBaudError(())),
         })
     }
@@ -860,6 +859,10 @@ where
     Usart: Instance,
 {
     /// Configures a USART peripheral to provide serial communication
+    ///
+    /// # Panics
+    ///
+    /// Panics if the configured baud rate is impossible for the hardware to setup.
     pub fn new<Config>(
         usart: Usart,
         pins: (Tx, Rx),
@@ -873,7 +876,7 @@ where
         Rx: RxPin<Usart>,
         Config: Into<config::Config>,
     {
-        use config::*;
+        use config::Parity;
 
         let config = config.into();
 
@@ -886,16 +889,21 @@ where
 
         let brr = Usart::clock(&clocks).integer() / config.baudrate.integer();
         crate::assert!(brr >= 16, "impossible baud rate");
-        usart.brr.write(|w| w.brr().bits(brr as u16));
+        usart.brr.write(|w| {
+            w.brr().bits(
+                // SAFETY: safe because of assert before
+                unsafe { u16::try_from(brr).unwrap_unchecked() },
+            )
+        });
 
         // We currently support only eight data bits as supporting a full-blown
         // configuration gets complicated pretty fast. The USART counts data
         // and partiy bits together so the actual amount depends on the parity
         // selection.
         let (m0, ps, pce) = match config.parity {
-            Parity::None => (M_A::BIT8, PS_A::EVEN, PCE_A::DISABLED),
-            Parity::Even => (M_A::BIT9, PS_A::EVEN, PCE_A::ENABLED),
-            Parity::Odd => (M_A::BIT9, PS_A::ODD, PCE_A::ENABLED),
+            Parity::None => (M_A::Bit8, PS_A::Even, PCE_A::Disabled),
+            Parity::Even => (M_A::Bit9, PS_A::Even, PCE_A::Enabled),
+            Parity::Odd => (M_A::Bit9, PS_A::Odd, PCE_A::Enabled),
         };
 
         usart
@@ -935,35 +943,6 @@ where
             .modify(|_, w| w.ue().disabled().re().disabled().te().disabled());
         (self.usart, self.pins)
     }
-
-    /// Joins previously [`Serial::split()`] serial.
-    ///
-    /// This is often needed to access methods only implemented for [`Serial`]
-    /// but not for [`Tx`] nor [`Rx`].
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let dp = pac::Peripherals::take().unwrap();
-    ///
-    /// (tx, rx) = Serial::new(dp.USART1, ...).split();
-    ///
-    /// // Do something with tx and rx
-    ///
-    /// serial = Serial::join(tx, rx);
-    /// ```
-    pub fn join(tx: split::Tx<Usart, Tx>, rx: split::Rx<Usart, Rx>) -> Self
-    where
-        Tx: TxPin<Usart>,
-        Rx: RxPin<Usart>,
-    {
-        let (usart, tx_pin) = tx.free();
-        let rx_pin = rx.free();
-        Self {
-            usart,
-            pins: (tx_pin, rx_pin),
-        }
-    }
 }
 
 impl<Usart, Pins> Serial<Usart, Pins>
@@ -988,6 +967,7 @@ where
         if self.usart.isr.read().busy().bit_is_set() {
             return None;
         }
+        #[allow(clippy::cast_possible_truncation)]
         Some(self.usart.rdr.read().rdr().bits() as u8)
     }
 
@@ -1025,13 +1005,13 @@ where
     /// Enable the interrupt for the specified [`Event`].
     #[inline]
     pub fn enable_interrupt(&mut self, event: Event) {
-        self.configure_interrupt(event, Toggle::On);
+        self.configure_interrupt(event, Switch::On);
     }
 
     /// Disable the interrupt for the specified [`Event`].
     #[inline]
     pub fn disable_interrupt(&mut self, event: Event) {
-        self.configure_interrupt(event, Toggle::Off);
+        self.configure_interrupt(event, Switch::Off);
     }
 
     /// Enable or disable the interrupt for the specified [`Event`].
@@ -1216,9 +1196,8 @@ where
     /// Configuring the UART to match each received character,
     /// with the configured one.
     ///
-    /// If the character is matched [`RxEvent::CharacterMatch`] is generated,
-    /// which can fire an interrupt, if enabled via [`Serial::configure_interrupt`]
-    #[inline(always)]
+    /// If the character is matched [`Event::CharacterMatch`] is generated,
+    /// which can fire an interrupt, if enabled via [`Serial::configure_interrupt()`]
     pub fn set_match_character(&mut self, char: u8) {
         // Note: This bit field can only be written when reception is disabled (RE = 0) or the
         // USART is disabled
@@ -1229,7 +1208,6 @@ where
     }
 
     /// Read out the configured match character.
-    #[inline(always)]
     pub fn match_character(&self) -> u8 {
         self.usart.cr2.read().add().bits()
     }
@@ -1254,11 +1232,11 @@ where
     /// - This value must only be programmed once per received character.
     /// - Can be written on the fly. If the new value is lower than or equal to the counter,
     ///   the RTOF flag is set.
-    /// - Values higher than 24 bits are truncated to 24 bit max (16_777_216).
+    /// - Values higher than 24 bits are truncated to 24 bit max (`16_777_216`).
     pub fn set_receiver_timeout(&mut self, value: Option<u32>) {
         if let Some(value) = value {
             self.usart.cr2.modify(|_, w| w.rtoen().enabled());
-            self.usart.rtor.modify(|_, w| w.rto().bits(value))
+            self.usart.rtor.modify(|_, w| w.rto().bits(value));
         } else {
             self.usart.cr2.modify(|_, w| w.rtoen().disabled());
         }
@@ -1327,6 +1305,7 @@ where
         usart.rqr.write(|w| w.rxfrq().set_bit());
         nb::Error::Other(Error::Overrun)
     } else if isr.rxne().bit_is_set() {
+        #[allow(clippy::cast_possible_truncation)]
         return Ok(usart.rdr.read().bits() as u8);
     } else {
         nb::Error::WouldBlock
@@ -1353,24 +1332,11 @@ where
     /// up to the interrupt handler.
     ///
     /// To read out the content of the read register without internal error handling, use
-    /// [`Serial::read_data_register`].
+    /// [`embedded_hal::serial::Read`].
     /// ...
     // -> According to this API it should be skipped.
     fn read(&mut self) -> nb::Result<u8, Error> {
         eh_read(&mut self.usart)
-    }
-}
-
-impl<Usart, Pin> serial::Read<u8> for Rx<Usart, Pin>
-where
-    Usart: Instance,
-    Pin: RxPin<Usart>,
-{
-    type Error = Error;
-
-    /// This implementation shares the same effects as the [`Serial`]s [`serial::Read`] implemenation.
-    fn read(&mut self) -> nb::Result<u8, Error> {
-        eh_read(unsafe { self.usart_mut() })
     }
 }
 
@@ -1697,14 +1663,14 @@ where
 {
     fn enable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmar().enabled());
         });
     }
 
     fn disable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmar().disabled());
         });
     }
@@ -1717,14 +1683,14 @@ where
 {
     fn enable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmat().enabled());
         });
     }
 
     fn disable_dma(&mut self) {
         // NOTE(unsafe) critical section prevents races
-        interrupt::free(|_| unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             self.usart().cr3.modify(|_, w| w.dmat().disabled());
         });
     }
@@ -1741,10 +1707,12 @@ where
         B: dma::WriteBuffer<Word = u8> + 'static,
         C: dma::Channel,
     {
-        // NOTE(unsafe) usage of a valid peripheral address
+        // SAFETY: RDR is valid peripheral address, safe to dereference and pass to the DMA
         unsafe {
-            channel
-                .set_peripheral_address(&self.usart.rdr as *const _ as u32, dma::Increment::Disable)
+            channel.set_peripheral_address(
+                core::ptr::addr_of!(self.usart.rdr) as u32,
+                dma::Increment::Disable,
+            );
         };
 
         // Safety: It is okay to call [`write_buffer'] multiple times as specified
@@ -1763,10 +1731,12 @@ where
         B: dma::ReadBuffer<Word = u8> + 'static,
         C: dma::Channel,
     {
-        // NOTE(unsafe) usage of a valid peripheral address
+        // SAFETY: TDR is valid peripheral address, safe to dereference and pass to the DMA
         unsafe {
-            channel
-                .set_peripheral_address(&self.usart.tdr as *const _ as u32, dma::Increment::Disable)
+            channel.set_peripheral_address(
+                core::ptr::addr_of!(self.usart.tdr) as u32,
+                dma::Increment::Disable,
+            );
         };
 
         SerialDmaTx {
@@ -1782,13 +1752,13 @@ where
     fn enable_dma(&mut self) {
         self.usart
             .cr3
-            .modify(|_, w| w.dmar().enabled().dmat().enabled())
+            .modify(|_, w| w.dmar().enabled().dmat().enabled());
     }
 
     fn disable_dma(&mut self) {
         self.usart
             .cr3
-            .modify(|_, w| w.dmar().disabled().dmat().disabled())
+            .modify(|_, w| w.dmar().disabled().dmat().disabled());
     }
 }
 
@@ -1830,34 +1800,6 @@ macro_rules! usart {
             impl crate::interrupts::InterruptNumber for $USARTX {
                 type Interrupt = Interrupt;
                 const INTERRUPT: Interrupt = $INTERRUPT;
-            }
-
-            impl<Tx, Rx> Serial<$USARTX, (Tx, Rx)>
-                where Tx: TxPin<$USARTX>, Rx: RxPin<$USARTX> {
-                /// Splits the [`Serial`] abstraction into a transmitter and a receiver half.
-                ///
-                /// This allows using [`Tx`] and [`Rx`] related actions to
-                /// be handled independently and even use these safely in different
-                /// contexts (like interrupt routines) without needing to do synchronization work
-                /// between them.
-                pub fn split(self) -> (split::Tx<$USARTX, Tx>, split::Rx<$USARTX, Rx>) {
-                    // NOTE(unsafe): This essentially duplicates the USART peripheral
-                    //
-                    // As RX and TX both do have direct access to the peripheral,
-                    // they must guarantee to only do atomic operations on the peripheral
-                    // registers to avoid data races.
-                    //
-                    // Tx and Rx won't access the same registers anyways,
-                    // as they have independent responsibilities, which are NOT represented
-                    // in the type system.
-                    let (tx, rx) = unsafe {
-                        (
-                            pac::Peripherals::steal().$USARTX,
-                            pac::Peripherals::steal().$USARTX,
-                        )
-                    };
-                    (split::Tx::new(tx, self.pins.0), split::Rx::new(rx, self.pins.1))
-                }
             }
 
             #[cfg(feature = "defmt")]
@@ -1927,12 +1869,12 @@ macro_rules! usart_var_clock {
         $(
             impl Instance for $USARTX {
                 fn clock(clocks: &Clocks) -> Hertz {
-                    // NOTE(unsafe): atomic read with no side effects
+                    // SAFETY: The read instruction of the RCC.cfgr3 register should be atomic
                     match unsafe {(*RCC::ptr()).cfgr3.read().$usartXsw().variant()} {
-                        USART1SW_A::PCLK => <$USARTX as rcc::BusClock>::clock(clocks),
-                        USART1SW_A::HSI => crate::rcc::HSI,
-                        USART1SW_A::SYSCLK => clocks.sysclk(),
-                        USART1SW_A::LSE => crate::rcc::LSE,
+                        USART1SW_A::Pclk => <$USARTX as rcc::BusClock>::clock(clocks),
+                        USART1SW_A::Hsi => crate::rcc::HSI,
+                        USART1SW_A::Sysclk => clocks.sysclk(),
+                        USART1SW_A::Lse => crate::rcc::LSE,
                     }
                 }
             }
