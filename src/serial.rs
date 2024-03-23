@@ -262,7 +262,7 @@ pub fn clear_rx_event(usart: &mut impl Instance, event: RxEvent) {
 
 /// Enables or disables an interrupt for a given event and USART instance.
 #[inline]
-pub fn configure_interrupt(usart: &mut impl Instance, event: Event, enable: impl Into<Toggle>) {
+pub fn configure_interrupt(usart: &mut impl Instance, event: Event, enable: impl Into<Switch>) {
     match event {
         Event::Tx(tx_event) => configure_tx_interrupt(usart, tx_event, enable),
         Event::Rx(rx_event) => configure_rx_interrupt(usart, rx_event, enable),
@@ -274,10 +274,10 @@ pub fn configure_interrupt(usart: &mut impl Instance, event: Event, enable: impl
 pub fn configure_tx_interrupt(
     usart: &mut impl Instance,
     event: TxEvent,
-    enable: impl Into<Toggle>,
+    enable: impl Into<Switch>,
 ) {
-    // Do a round way trip to be convert Into<Toggle> -> bool
-    let enable: Toggle = enable.into();
+    // Do a round way trip to be convert Into<Switch> -> bool
+    let enable: Switch = enable.into();
     let enable: bool = enable.into();
     match event {
         TxEvent::TransmitDataRegisterEmtpy => usart.cr1.modify(|_, w| w.txeie().bit(enable)),
@@ -291,10 +291,10 @@ pub fn configure_tx_interrupt(
 pub fn configure_rx_interrupt(
     usart: &mut impl Instance,
     event: RxEvent,
-    enable: impl Into<Toggle>,
+    enable: impl Into<Switch>,
 ) {
-    // Do a round way trip to be convert Into<Toggle> -> bool
-    let enable: Toggle = enable.into();
+    // Do a round way trip to be convert Into<Switch> -> bool
+    let enable: Switch = enable.into();
     let enable: bool = enable.into();
 
     match event {
@@ -710,7 +710,7 @@ mod split {
 
         /// Enables or disables an interrupt for a given [`TxEvent`].
         #[inline]
-        pub fn configure_interrupt(&mut self, event: TxEvent, enable: impl Into<crate::Toggle>) {
+        pub fn configure_interrupt(&mut self, event: TxEvent, enable: impl Into<crate::Switch>) {
             // Safety: Only configures TX specific interrupts, which should not interfere
             // with the RX half
             configure_tx_interrupt(unsafe { self.usart_mut() }, event, enable)
@@ -811,7 +811,7 @@ mod split {
 
         /// Enables or disables an interrupt for a given [`RxEvent`].
         #[inline]
-        pub fn configure_interrupt(&mut self, event: RxEvent, enable: impl Into<crate::Toggle>) {
+        pub fn configure_interrupt(&mut self, event: RxEvent, enable: impl Into<crate::Switch>) {
             // Safety: Only configures RX specific interrupts, which should not interfere
             // with the TX half
             configure_rx_interrupt(unsafe { self.usart_mut() }, event, enable)
@@ -1016,19 +1016,19 @@ where
 
     /// Enable or disable the interrupt for the specified [`Event`].
     #[inline]
-    pub fn configure_interrupt(&mut self, event: Event, enable: impl Into<Toggle>) {
+    pub fn configure_interrupt(&mut self, event: Event, enable: impl Into<Switch>) {
         configure_interrupt(&mut self.usart, event, enable)
     }
 
     /// Enable or disable the interrupt for the specified [`TxEvent`].
     #[inline]
-    pub fn configure_tx_interrupt(&mut self, event: TxEvent, enable: impl Into<Toggle>) {
+    pub fn configure_tx_interrupt(&mut self, event: TxEvent, enable: impl Into<Switch>) {
         configure_tx_interrupt(&mut self.usart, event, enable)
     }
 
     /// Enable or disable the interrupt for the specified [`RxEvent`].
     #[inline]
-    pub fn configure_rx_interrupt(&mut self, event: RxEvent, enable: impl Into<Toggle>) {
+    pub fn configure_rx_interrupt(&mut self, event: RxEvent, enable: impl Into<Switch>) {
         configure_rx_interrupt(&mut self.usart, event, enable)
     }
 
